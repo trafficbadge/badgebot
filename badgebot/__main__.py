@@ -7,6 +7,7 @@
   python -m badgebot act <key> approve|reject|unpublish       act from the command line
   python -m badgebot status                                   list runs and their state
   python -m badgebot printify-setup                           find your shop, kiss-cut and 2x2 IDs
+  python -m badgebot printify-test <shop id>                  publish + delete a throwaway test sticker
 """
 import argparse
 import os
@@ -35,6 +36,7 @@ def main():
     ac = sub.add_parser("act"); ac.add_argument("key"); ac.add_argument("action")
     sub.add_parser("status")
     sub.add_parser("printify-setup")
+    pt = sub.add_parser("printify-test"); pt.add_argument("shop_id"); pt.add_argument("--keep", action="store_true")
     a = ap.parse_args()
     cfg = Config()
     p = Pipeline(cfg)
@@ -56,6 +58,8 @@ def main():
             print(f"{run['key']}  {run['status']:<13} {run.get('title')}")
     elif a.cmd == "printify-setup":
         printify_setup(cfg)
+    elif a.cmd == "printify-test":
+        printify_test(cfg, a.shop_id, a.keep)
     elif a.cmd == "serve":
         if a.with_watch:
             threading.Thread(target=watch, args=(p, cfg, 2.0), daemon=True).start()
@@ -63,25 +67,86 @@ def main():
         make_app(p, cfg).run(host="0.0.0.0", port=a.port, threaded=True)
 
 
-def printify_setup(cfg):
-    """Prints the numbers for PRINTIFY_SHOP_ID / _BLUEPRINT_ID / _PROVIDER_ID / _VARIANT_ID."""
+TWO_BY_TWO = __import__("re").compile(r'^\s*2\s*(?:"|in|inch)?\s*[x\u00d7]\s*2\b', __import__("re").I)
+
+
+def _printify(cfg):
     import requests
     if not cfg.printify_token:
         raise SystemExit("Set PRINTIFY_TOKEN first.")
     base, h = "https://api.printify.com/v1", {"Authorization": f"Bearer {cfg.printify_token}",
                                               "User-Agent": "badgebot/1.0"}
-    get = lambda path: requests.get(base + path, headers=h, timeout=30).json()
+    def get(path):
+        r = requests.get(base + path, headers=h, timeout=30)
+        if r.status_code >= 300:
+            hint = " (the token was not accepted: check it was pasted whole)" if r.status_code in (401, 403) else ""
+            raise SystemExit(f"Printify said HTTP {r.status_code}{hint}: {r.text[:200]}")
+        return r.json()
+    return base, h, get
+
+
+def _kiss_cut_choices(get):
+    """[(provider_id, provider_title, variant_id, variant_title)] for 2x2 kiss-cut stickers."""
+    out = []
+    for pp in get("/catalog/blueprints/400/print_providers.json"):
+        variants = get(f"/catalog/blueprints/400/print_providers/{pp['id']}/variants.json").get("variants", [])
+        for v in variants:
+            if TWO_BY_TWO.match(v["title"]):
+                out.append((pp["id"], pp["title"], v["id"], v["title"]))
+        if not any(c[0] == pp["id"] for c in out):
+            print(f"   (provider {pp['id']} {pp['title']}: no 2x2 size; sizes: "
+                  f"{', '.join(v['title'] for v in variants[:8])})")
+    return out
+
+
+def printify_setup(cfg):
+    """Prints the numbers for PRINTIFY_SHOP_ID / _BLUEPRINT_ID / _PROVIDER_ID / _VARIANT_ID."""
+    base, h, get = _printify(cfg)
     for shop in get("/shops.json"):
         print(f"PRINTIFY_SHOP_ID={shop['id']}   ({shop.get('title')}, {shop.get('sales_channel')})")
-    for bp in get("/catalog/blueprints.json"):
-        if "kiss" in bp["title"].lower() and "sticker" in bp["title"].lower():
-            print(f"\nPRINTIFY_BLUEPRINT_ID={bp['id']}   {bp['title']}")
-            for pp in get(f"/catalog/blueprints/{bp['id']}/print_providers.json"):
-                sizes = [v for v in get(f"/catalog/blueprints/{bp['id']}/print_providers/{pp['id']}/variants.json")
-                         .get("variants", []) if v["title"].replace(" ", "").startswith('2"x2"')]
-                for v in sizes:
-                    print(f"   PRINTIFY_PROVIDER_ID={pp['id']} ({pp['title']})   PRINTIFY_VARIANT_ID={v['id']} ({v['title']})")
+    print("\nPRINTIFY_BLUEPRINT_ID=400   Kiss-Cut Stickers, 2x2 sizes by provider:")
+    for pid, ptitle, vid, vtitle in _kiss_cut_choices(get):
+        print(f"   PRINTIFY_PROVIDER_ID={pid} ({ptitle})   PRINTIFY_VARIANT_ID={vid} ({vtitle})")
     print("\nPick the provider that also makes your 15x3.75 bumper sticker (same provider = one shipment).")
+
+
+def printify_test(cfg, shop_id, keep=False):
+    """Publish a throwaway 'TEST - delete me' sticker to one shop and report whether it went live."""
+    import requests, base64, glob
+    base, h, get = _printify(cfg)
+    choices = _kiss_cut_choices(get)
+    if not choices:
+        raise SystemExit("No 2x2 kiss-cut size found; send Claude the lines above.")
+    pid, ptitle, vid, vtitle = next((c for c in choices if str(c[0]) == str(cfg.printify_provider_id)), choices[0])
+    print(f"Using provider {pid} ({ptitle}), size {vtitle}")
+    art = os.path.join(os.path.dirname(__file__), "..", "sample_badges.png")
+    with open(art, "rb") as f:
+        img = requests.post(f"{base}/uploads/images.json", headers=h, timeout=60,
+                            json={"file_name": "test.png", "contents": base64.b64encode(f.read()).decode()}).json()
+    prod = requests.post(f"{base}/shops/{shop_id}/products.json", headers=h, timeout=60, json={
+        "title": "TEST - delete me", "description": "Badgebot connection test.", "blueprint_id": 400,
+        "print_provider_id": pid, "variants": [{"id": vid, "price": 400, "is_enabled": True}],
+        "print_areas": [{"variant_ids": [vid], "placeholders": [{"position": "front",
+                         "images": [{"id": img["id"], "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}]}]}]})
+    print("Create product:", prod.status_code, prod.text[:200] if prod.status_code >= 300 else "ok")
+    if prod.status_code >= 300:
+        return
+    product_id = prod.json()["id"]
+    pub = requests.post(f"{base}/shops/{shop_id}/products/{product_id}/publish.json", headers=h, timeout=60,
+                        json={"title": True, "description": True, "images": True, "variants": True, "tags": True,
+                              "keyFeatures": True, "shipping_template": True})
+    print("Publish:", pub.status_code, pub.text[:300] if pub.status_code >= 300 else "ok")
+    for _ in range(12):
+        time.sleep(10)
+        d = get(f"/shops/{shop_id}/products/{product_id}.json")
+        ext = d.get("external") or {}
+        print("  status:", "visible" if d.get("visible") else "not visible yet",
+              "| store link:", ext.get("handle") or "(none yet)")
+        if ext.get("handle"):
+            break
+    if not keep:
+        r = requests.delete(f"{base}/shops/{shop_id}/products/{product_id}.json", headers=h, timeout=30)
+        print("Test product deleted:", r.status_code < 300)
 
 
 def watch(p, cfg, every_min):

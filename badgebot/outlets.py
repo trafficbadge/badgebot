@@ -21,7 +21,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 UA = "badgebot/1.0 (Seattle traffic badges)"
-URL_OK = re.compile(r"^https://[a-z0-9.-]+(:\d+)?/products/[a-z0-9-]+$")
+URL_OK = re.compile(r"^https://[a-z0-9.-]+(:\d+)?/products?/[a-z0-9-]+$")   # Shopify /products/, Pop-Up /product/
 TITLE_OK = re.compile(r"^[A-Z0-9 \-&*'.]{1,30}$")
 
 
@@ -153,6 +153,8 @@ class Printify:
         ext = (data.get("external") or {}).get("handle") or ""
         if not ext:
             return None
+        if ext.startswith("https://") and ".myshopify.com/" not in ext:
+            return ext.rstrip("/")   # e.g. the Pop-Up Store's own link: use it as given
         slug = ext.rstrip("/").split("/")[-1]
         if self.cfg.store_url:
             return f"{self.cfg.store_url.rstrip('/')}/products/{slug}"
@@ -166,7 +168,7 @@ class Printify:
             r = self.http.get(url, headers={"User-Agent": UA}, timeout=20, allow_redirects=True)
         except requests.RequestException:
             return False
-        return r.status_code == 200 and "/products/" in r.url
+        return r.status_code == 200 and ("/products/" in r.url or "/product/" in r.url)
 
     def take_down(self, run):
         pid = (run.get("printify") or {}).get("product_id")

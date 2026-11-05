@@ -705,3 +705,27 @@ def test_home_page_says_running(tmp_path):
     cfg = Config(data_dir=str(tmp_path))
     r = make_app(Pipeline(cfg), cfg).test_client().get("/")
     assert r.status_code == 200 and b"Badgebot is running" in r.data
+
+
+def test_popup_store_links_are_used_as_given(tmp_path):
+    from badgebot.outlets import post_text
+    snap = R("blueberry_405_2018")
+    net = FakeNet()
+    popup = "https://badtraffic206.printify.me/product/34010437"
+    orig = net.request
+    def request(method, url, **kw):
+        if "api.printify.com" in url and method == "GET" and url.endswith("prod1.json"):
+            net.calls.append((method, url, kw))
+            return FakeResp(data={"external": {"handle": popup}})
+        if url == popup:
+            net.calls.append((method, url, kw))
+            return FakeResp(200, url=popup)
+        return orig(method, url, **kw)
+    net.request = request
+    keys = dict(REAL, store_url=None)
+    cfg = Config(data_dir=str(tmp_path), anthropic_api_key=None, smtp_host=None, **keys)
+    p = Pipeline(cfg, clock=Clock(snap.taken_at + timedelta(minutes=2)), http=net, sleep=lambda s: None)
+    [run] = p.process(snap)
+    run = p.load(run["key"])
+    assert run["status"] == "published" and run["product_url"] == popup
+    assert popup in post_text("bluesky", run["title"], run["year"], popup)
