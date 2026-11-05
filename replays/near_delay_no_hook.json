@@ -1,0 +1,28 @@
+{
+  "_note": "SYNTHETIC REPLAY: reconstructed for testing, not real WSDOT records. Field names follow the WSDOT Traveler Information API.",
+  "taken_at": "2025-10-02T00:00:00Z",
+  "travel_times": [
+    {
+      "TravelTimeID": 1,
+      "RouteName": "Lynnwood-Bellevue via I-405 (SB PM)",
+      "Description": "Lynnwood to Bellevue via I-405",
+      "CurrentTime": 150,
+      "AverageTime": 22,
+      "Distance": 15.0
+    }
+  ],
+  "alerts": [
+    {
+      "AlertID": 404300,
+      "EventCategory": "Collision",
+      "Priority": "High",
+      "HeadlineDescription": "Three-car collision blocking two left lanes of southbound I-405.",
+      "Region": "Northwest",
+      "StartRoadwayLocation": {
+        "RoadName": "405",
+        "Description": "Kirkland"
+      },
+      "StartTime": "2025-10-01T23:20:00Z"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "_note": "SYNTHETIC REPLAY: reconstructed for testing, not real WSDOT records. Field names follow the WSDOT Traveler Information API.",
+  "taken_at": "2025-09-09T00:20:00Z",
+  "travel_times": [
+    {
+      "TravelTimeID": 7,
+      "RouteName": "Seattle-Everett via I-5 (NB PM)",
+      "Description": "Seattle to Everett via I-5",
+      "CurrentTime": 160,
+      "AverageTime": 30,
+      "Distance": 15.0
+    }
+  ],
+  "alerts": [
+    {
+      "AlertID": 404100,
+      "EventCategory": "Collision",
+      "Priority": "Highest",
+      "HeadlineDescription": "Truck carrying live chickens overturned on northbound I-5 near Northgate. One person transported with minor injuries.",
+      "Region": "Northwest",
+      "StartRoadwayLocation": {
+        "RoadName": "005",
+        "Description": "Northgate"
+      },
+      "StartTime": "2025-09-08T23:50:00Z"
+    }
+  ]
+}

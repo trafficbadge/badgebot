@@ -1,0 +1,28 @@
+{
+  "_note": "SYNTHETIC REPLAY: reconstructed for testing, not real WSDOT records. Field names follow the WSDOT Traveler Information API.",
+  "taken_at": "2016-05-24T00:30:00Z",
+  "travel_times": [
+    {
+      "TravelTimeID": 8,
+      "RouteName": "Seattle-Bellevue via SR 520 (EB PM)",
+      "Description": "Seattle to Bellevue via SR 520",
+      "CurrentTime": 155,
+      "AverageTime": 20,
+      "Distance": 15.0
+    }
+  ],
+  "alerts": [
+    {
+      "AlertID": 405000,
+      "EventCategory": "Special Event",
+      "Priority": "High",
+      "HeadlineDescription": "VIP motorcade for a visit by Hillary Clinton: rolling closures on I-5 and SR 520 through the evening commute.",
+      "Region": "Northwest",
+      "StartRoadwayLocation": {
+        "RoadName": "005",
+        "Description": "Downtown Seattle"
+      },
+      "StartTime": "2016-05-23T23:00:00Z"
+    }
+  ]
+}

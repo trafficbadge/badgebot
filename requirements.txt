@@ -1,0 +1,7 @@
+requests
+flask
+pillow
+playwright
+pytest
+tzdata
+truststore

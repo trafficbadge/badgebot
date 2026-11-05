@@ -1,0 +1,31 @@
+{
+  "_note": "SYNTHETIC REPLAY: reconstructed for testing, not real WSDOT records. Field names follow the WSDOT Traveler Information API.",
+  "taken_at": "2025-10-15T23:00:00Z",
+  "travel_times": [
+    {
+      "TravelTimeID": 3,
+      "RouteName": "Everett-Seattle (SB PM)",
+      "Description": "Everett to Seattle via I-5",
+      "CurrentTime": 165,
+      "AverageTime": 28,
+      "Distance": 15.0
+    }
+  ],
+  "alerts": [
+    {
+      "AlertID": 406000,
+      "EventCategory": "Collision",
+      "Priority": "Highest",
+      "HeadlineDescription": "Semi hauling pumpkins overturned, blocking southbound I-5 near Lynnwood.",
+      "Region": "Northwest",
+      "StartRoadwayLocation": {
+        "RoadName": "005",
+        "Description": "Lynnwood"
+      },
+      "StartTime": "2025-10-15T22:30:00Z"
+    }
+  ],
+  "social": [
+    "i heard someone died in the pumpkin crash??"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "_note": "SYNTHETIC REPLAY: reconstructed for testing, not real WSDOT records. Field names follow the WSDOT Traveler Information API.",
+  "taken_at": "2025-05-01T02:30:00Z",
+  "travel_times": [
+    {
+      "TravelTimeID": 8,
+      "RouteName": "Seattle-Bellevue via SR 520 (EB PM)",
+      "Description": "Seattle to Bellevue via SR 520",
+      "CurrentTime": 145,
+      "AverageTime": 20,
+      "Distance": 15.0
+    }
+  ],
+  "alerts": [
+    {
+      "AlertID": 407100,
+      "EventCategory": "Special Event",
+      "Priority": "Highest",
+      "HeadlineDescription": "Rally on SR 520 has blocked all lanes. Police report clashes and arrests near Montlake.",
+      "Region": "Northwest",
+      "StartRoadwayLocation": {
+        "RoadName": "520",
+        "Description": "Montlake"
+      },
+      "StartTime": "2025-05-01T01:40:00Z"
+    }
+  ]
+}

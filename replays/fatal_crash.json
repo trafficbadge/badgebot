@@ -1,0 +1,28 @@
+{
+  "_note": "SYNTHETIC REPLAY: reconstructed for testing, not real WSDOT records. Field names follow the WSDOT Traveler Information API.",
+  "taken_at": "2025-03-12T00:10:00Z",
+  "travel_times": [
+    {
+      "TravelTimeID": 6,
+      "RouteName": "Federal Way-Seattle (NB PM)",
+      "Description": "Federal Way to Seattle via I-5",
+      "CurrentTime": 170,
+      "AverageTime": 25,
+      "Distance": 15.0
+    }
+  ],
+  "alerts": [
+    {
+      "AlertID": 403010,
+      "EventCategory": "Collision",
+      "Priority": "Highest",
+      "HeadlineDescription": "Fatal collision involving a semi carrying salmon closes all northbound lanes of I-5 near S 320th St.",
+      "Region": "Northwest",
+      "StartRoadwayLocation": {
+        "RoadName": "005",
+        "Description": "S 320th St"
+      },
+      "StartTime": "2025-03-11T23:30:00Z"
+    }
+  ]
+}
