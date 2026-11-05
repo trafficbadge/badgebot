@@ -68,6 +68,8 @@ class Config:
     wsdot_access_code: str = field(default_factory=lambda: _env("WSDOT_ACCESS_CODE"))
     anthropic_api_key: str = field(default_factory=lambda: _env("ANTHROPIC_API_KEY"))
     anthropic_model: str = field(default_factory=lambda: _env("ANTHROPIC_MODEL", "claude-sonnet-5-5"))
+    # Railway's trial/Hobby plans block SMTP, so on Railway alerts go through Resend's web API.
+    resend_api_key: str = field(default_factory=lambda: _env("RESEND_API_KEY"))
     smtp_host: str = field(default_factory=lambda: _env("SMTP_HOST"))
     smtp_port: str = field(default_factory=lambda: _env("SMTP_PORT", "587"))
     smtp_user: str = field(default_factory=lambda: _env("SMTP_USER"))

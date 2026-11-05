@@ -68,6 +68,10 @@ def make_app(pipeline, cfg):
             abort(404)
         return send_file(os.path.abspath(path), mimetype="image/jpeg")
 
+    @app.get("/")
+    def home():
+        return page("<p>Badgebot is running.</p>")
+
     @app.get("/health")
     def health():
         return {"ok": True}

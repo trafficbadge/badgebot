@@ -668,3 +668,40 @@ def test_popular_post_with_no_safe_title_just_tells_you(tmp_path):
 def test_drawbridge_openings_are_not_hooks():
     from badgebot.vocab import find_hook_words
     assert find_hook_words("On SR 99 at 1st Ave S Bridge all lanes will be closed due to boat traffic.") == []
+
+
+# ---- 10. Railway: alerts through Resend; hooks only count on Seattle corridors -------------
+def test_snow_on_a_mountain_highway_is_not_a_seattle_badge(tmp_path):
+    snap = R("snowpocalypse_2019")
+    for a in snap.alerts:
+        a["StartRoadwayLocation"] = dict(a.get("StartRoadwayLocation") or {}, RoadName="020")
+    snap.travel_times = []          # no Seattle jam either
+    cfg, clock, p = make(tmp_path, snap)
+    assert detect(snap, cfg) == []
+
+
+def test_alert_email_goes_through_resend_with_linked_picture(tmp_path, monkeypatch):
+    import badgebot.notify as notify
+    sent = []
+    monkeypatch.setattr(notify.requests, "post",
+                        lambda url, **kw: sent.append((url, kw)) or FakeResp(200, {"id": "e1"}))
+    snap = R("blueberry_405_2018")
+    cfg = Config(data_dir=str(tmp_path), anthropic_api_key=None, smtp_host=None, resend_api_key="re_x",
+                 owner_email="o@example.com", mail_from="info@badtraffic206.com",
+                 public_base_url="https://bot.badtraffic206.com")
+    p = Pipeline(cfg, clock=Clock(snap.taken_at + timedelta(minutes=2)))
+    [run] = p.process(snap)
+    [(url, kw)] = sent
+    assert url == "https://api.resend.com/emails"
+    assert kw["headers"]["Authorization"] == "Bearer re_x"
+    body = kw["json"]
+    assert body["to"] == ["o@example.com"] and body["subject"] == "Published: BLUEBERRY TRUCK ON 405 (2018)"
+    assert f"https://bot.badtraffic206.com/media/{run['key']}/preview.png?t={run['token']}" in body["html"]
+    assert f"https://bot.badtraffic206.com/a/{run['key']}/unpublish?t={run['token']}" in body["text"]
+
+
+def test_home_page_says_running(tmp_path):
+    from badgebot.server import make_app
+    cfg = Config(data_dir=str(tmp_path))
+    r = make_app(Pipeline(cfg), cfg).test_client().get("/")
+    assert r.status_code == 200 and b"Badgebot is running" in r.data

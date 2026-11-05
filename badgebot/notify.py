@@ -1,9 +1,12 @@
-"""Email notifications to the owner, sent over SMTP from a dedicated account.
+"""Email notifications to the owner: through Resend's web API when RESEND_API_KEY is set
+(needed on Railway, which blocks SMTP on its smaller plans), otherwise over SMTP.
 
 Works with any provider that allows SMTP with an app password (iCloud, Fastmail, Yahoo,
 Gmail...). Without SMTP settings, each email is written to data/outbox/ as an .eml file
 plus a line in data/outbox.jsonl, which is what the tests read.
 """
+import base64
+import html as _html
 import json
 import mimetypes
 import os
@@ -13,11 +16,16 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
+import requests
+
+RESEND_URL = "https://api.resend.com/emails"
+
 
 class Mailer:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.live = all([cfg.smtp_host, cfg.smtp_user, cfg.smtp_password, cfg.owner_email])
+        self.resend = bool(cfg.resend_api_key and cfg.owner_email)
+        self.live = self.resend or all([cfg.smtp_host, cfg.smtp_user, cfg.smtp_password, cfg.owner_email])
         self.outbox_dir = os.path.join(cfg.data_dir, "outbox")
 
     def build(self, subject, text, html, image_path=None):
@@ -43,7 +51,26 @@ class Mailer:
             msg.add_alternative(html.replace("{{IMG}}", ""), subtype="html")
         return msg
 
-    def send(self, subject, text, html, image_path=None):
+    def _send_resend(self, subject, text, html, image_path=None, image_url=None):
+        sender = self.cfg.mail_from or "info@badtraffic206.com"
+        body = {"from": f"Badgebot <{sender}>", "to": [self.cfg.owner_email], "subject": subject, "text": text}
+        if image_url:   # the server's own picture link: shows in every mail app
+            body["html"] = html.replace("{{IMG}}", f'<img src="{_html.escape(image_url)}" width="300" '
+                                                   f'alt="badge preview" style="display:block;margin:12px 0">')
+        else:
+            body["html"] = html.replace("{{IMG}}", "")
+            if image_path and os.path.exists(image_path):
+                with open(image_path, "rb") as f:
+                    body["attachments"] = [{"filename": "badge.png", "content": base64.b64encode(f.read()).decode()}]
+        r = requests.post(RESEND_URL, json=body, timeout=30,
+                          headers={"Authorization": f"Bearer {self.cfg.resend_api_key}", "User-Agent": "badgebot/1.0"})
+        if r.status_code >= 300:
+            raise RuntimeError(f"Resend refused the email: HTTP {r.status_code} {r.text[:200]}")
+        print(f"Email sent to {self.cfg.owner_email} via Resend: {subject}", flush=True)
+
+    def send(self, subject, text, html, image_path=None, image_url=None):
+        if self.resend:
+            return self._send_resend(subject, text, html, image_path, image_url)
         msg = self.build(subject, text, html, image_path)
         if not self.live:
             os.makedirs(self.outbox_dir, exist_ok=True)

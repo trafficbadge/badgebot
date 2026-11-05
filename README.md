@@ -111,6 +111,10 @@ Railway Variables, and point a custom domain (e.g. bot.badtraffic206.com) at the
 `PUBLIC_BASE_URL` to it. Social posts and the mailing list stay in practice mode until Printify is
 configured, so a post can never carry a made-up store link.
 
+Railway's trial and Hobby plans block SMTP, so set `RESEND_API_KEY` (free at resend.com,
+100 emails a day) and `MAIL_FROM`; alerts then go through Resend's web API and the badge picture
+is linked from the server. The SMTP settings are only used on your own PC.
+
 ## Tuning
 
 Everything lives in `badgebot/config.py` (threshold, corridors, hold expiry, patch size,

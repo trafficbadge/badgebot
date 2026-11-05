@@ -243,7 +243,9 @@ class Pipeline:
         body = (f"<div style='font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:16px;color:#111'>"
                 f"<p>{lead}</p>{{{{IMG}}}}<p>{buttons}</p>"
                 f"<p style='color:#555;font-size:13px'>{html.escape(detail).replace(chr(10), '<br>')}</p></div>")
-        self.mailer.send(subject, text, body, img)
+        img_url = (f"{self.cfg.public_base_url.rstrip('/')}/media/{run['key']}/preview.png?t={run['token']}"
+                   if self.cfg.public_base_url and img and run.get("token") else None)
+        self.mailer.send(subject, text, body, img, image_url=img_url)
 
     @staticmethod
     def _button(label, url, color):

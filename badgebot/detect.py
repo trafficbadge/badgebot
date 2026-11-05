@@ -33,6 +33,9 @@ def _alert_text(a):
     return " ".join(p for p in parts if p)
 
 
+CORRIDOR_ROADS = {"5", "405", "90", "520", "99"}   # WSDOT RoadName, leading zeros removed
+
+
 def detect(snapshot, cfg):
     """Return a list of Candidates (usually 0 or 1)."""
     slow = []
@@ -53,6 +56,8 @@ def detect(snapshot, cfg):
     # Alerts that carry a hook (blueberries, snow, motorcade...)
     hooked = []
     for a in regional:
+        if _road_of(a) not in CORRIDOR_ROADS:   # e.g. SR 20 closing for winter is not a Seattle event
+            continue
         words = find_hook_words(_alert_text(a))
         if words:
             hooked.append((a, words))
