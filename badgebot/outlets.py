@@ -21,6 +21,15 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 UA = "badgebot/1.0 (Seattle traffic badges)"
+
+
+def edition_html(body, left, size):
+    """Listing text with the limited-edition line; only this line changes as copies sell."""
+    body = re.sub(r'<p class="edition">.*?</p>', "", body or "")
+    line = f"{left} of {size} left" if left > 0 else "Sold out"
+    return body + f'<p class="edition"><b>Limited edition of {size}.</b> {line}.</p>'
+
+
 URL_OK = re.compile(r"^https://[a-z0-9.-]+(:\d+)?/products?/[a-z0-9-]+$")   # Shopify /products/, Pop-Up /product/
 TITLE_OK = re.compile(r"^[A-Z0-9 \-&*'.]{1,30}$")
 
@@ -52,7 +61,9 @@ def _check(resp, what):
 # ---------------------------------------------------------------- post wording
 def post_text(platform, title, year, url, store_url=None):
     """The only words that ever get posted. Refuses anything that isn't title/year/our link."""
-    if not TITLE_OK.match(title or "") or not (1800 <= int(year) <= 2200):
+    years = [int(y) for y in re.findall(r"\d{4}", str(year))]
+    if (not TITLE_OK.match(title or "") or not re.fullmatch(r"\d{4}(\s*[-\u2013]\s*\d{4})?", str(year))
+            or not all(1800 <= y <= 2200 for y in years) or years != sorted(years)):
         raise OutletError(f"refusing to post title {title!r}")
     if not URL_OK.match(url):
         raise OutletError(f"refusing to post link {url!r}")
@@ -108,7 +119,8 @@ class Printify:
             art = base64.b64encode(f.read()).decode()
         upload = {"file_name": f"{L['Handle']}.png", "contents": art}
         product = {
-            "title": L["Title"], "description": L["Body (HTML)"],
+            "title": L["Title"], "description": edition_html(L["Body (HTML)"], self.cfg.edition_size,
+                                                             self.cfg.edition_size),
             "blueprint_id": int(self.cfg.printify_blueprint_id or 0),
             "print_provider_id": int(self.cfg.printify_provider_id or 0),
             "tags": [t.strip() for t in L["Tags"].split(",")],
@@ -169,6 +181,39 @@ class Printify:
         except requests.RequestException:
             return False
         return r.status_code == 200 and ("/products/" in r.url or "/product/" in r.url)
+
+    def sold_counts(self, pages=10):
+        """Copies sold per product, from the shop's orders (canceled orders don't count)."""
+        if self.practice:
+            path = os.path.join(self.cfg.data_dir, "practice_sales.json")   # tests and dry runs
+            return json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+        counts = {}
+        for page in range(1, pages + 1):
+            data = _check(self.http.get(self._shop("/orders.json"), headers=self._h(), timeout=30,
+                                        params={"limit": 50, "page": page}), "Printify orders")
+            for order in data.get("data", []):
+                if order.get("status") in ("canceled", "cancelled"):
+                    continue
+                for item in order.get("line_items", []):
+                    pid = str(item.get("product_id"))
+                    counts[pid] = counts.get(pid, 0) + int(item.get("quantity", 1))
+            if page >= int(data.get("last_page") or 1):
+                break
+        return counts
+
+    def update_left(self, run, left):
+        """Rewrite the listing's '63 of 100 left' line."""
+        pid = run["printify"]["product_id"]
+        body = {"description": edition_html(run["listing"]["Body (HTML)"], left, self.cfg.edition_size)}
+        if self.practice:
+            self.record("printify", "PUT", self._shop(f"/products/{pid}.json"), body)
+            return
+        _check(self.http.put(self._shop(f"/products/{pid}.json"), json=body, headers=self._h(), timeout=30),
+               "Printify update listing")
+        _check(self.http.post(self._shop(f"/products/{pid}/publish.json"), headers=self._h(), timeout=60,
+                              json={"title": False, "description": True, "images": False, "variants": False,
+                                    "tags": False, "keyFeatures": False, "shipping_template": False}),
+               "Printify republish listing")
 
     def take_down(self, run):
         pid = (run.get("printify") or {}).get("product_id")

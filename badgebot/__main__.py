@@ -36,6 +36,7 @@ def main():
     ac = sub.add_parser("act"); ac.add_argument("key"); ac.add_argument("action")
     sub.add_parser("status")
     sub.add_parser("printify-setup")
+    sub.add_parser("publish-history")
     pt = sub.add_parser("printify-test"); pt.add_argument("shop_id"); pt.add_argument("--keep", action="store_true")
     a = ap.parse_args()
     cfg = Config()
@@ -56,6 +57,9 @@ def main():
     elif a.cmd == "status":
         for run in p.all_runs():
             print(f"{run['key']}  {run['status']:<13} {run.get('title')}")
+    elif a.cmd == "publish-history":
+        for run in p.publish_history():
+            print(run["key"], run["status"], run["title"], run.get("product_url") or "")
     elif a.cmd == "printify-setup":
         printify_setup(cfg)
     elif a.cmd == "printify-test":
@@ -151,6 +155,12 @@ def printify_test(cfg, shop_id, keep=False):
 
 def watch(p, cfg, every_min):
     from .sources import fetch_wsdot_bluesky
+    if os.environ.get("PUBLISH_HISTORY") == "1":   # set once in Railway to put the history set on sale
+        try:
+            for run in p.publish_history():
+                print(time.strftime("%H:%M"), "history", run["key"], run["status"], run["title"], flush=True)
+        except Exception as e:
+            print(time.strftime("%H:%M"), "history error:", e, flush=True)
     last_buzz = 0.0
     while True:
         try:

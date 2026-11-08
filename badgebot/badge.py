@@ -19,6 +19,8 @@ Outputs per badge (in the run folder):
   thumb.png     small preview
 """
 import base64
+import hashlib
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -32,12 +34,21 @@ RING_RX, RING_RY = 151.0, 111.0        # the road
 FIELD_CX, FIELD_CY, FIELD_RX, FIELD_RY = 160.0, 122.0, 112.0, 72.0
 TITLE_ARC = "M 36 120 A 124 85 0 0 1 284 120"     # baseline, glyphs grow outward
 YEAR_ARC = "M 24 120 A 136 98 0 0 0 296 120"      # baseline, glyphs grow inward
-# Road center line on the two sides only, so it never runs under the title or the year.
-ROAD_DASHES = "M 273.4 74.3 A 131 91.5 0 0 1 209.1 204.8 M 110.9 204.8 A 131 91.5 0 0 1 46.6 74.3"
+RIM_W = 4.4                            # gold edge on the outside of the road
+# The middle of the visible road: halfway between the picture's edge and the inside of the rim,
+# measured at the top, bottom and sides. Title, year and dashes are all centered on this line.
+ROAD_MID_CX = FIELD_CX
+ROAD_MID_RX = ((RING_RX - RIM_W) + FIELD_RX) / 2
+_road_top = ((CY - (RING_RY - RIM_W)) + (FIELD_CY - FIELD_RY)) / 2
+_road_bottom = ((CY + (RING_RY - RIM_W)) + (FIELD_CY + FIELD_RY)) / 2
+ROAD_MID_CY = (_road_top + _road_bottom) / 2
+ROAD_MID_RY = (_road_bottom - _road_top) / 2
+DASH_GAP = 9.0                         # road units of clear road between the lettering and the dashes
 TITLE_ROOM_UNITS = 225.0               # usable arc length before the dashes begin (238 minus margin)
 TITLE_SIZES = [22, 21, 20, 19]         # 19 is the smallest that keeps letters >= 1.8 mm tall
 MIN_SQUEEZE = 0.82                     # last resort: condense a long title up to 18%
 YEAR_SIZE = 19
+YEAR_RANGE_SIZE = 16                    # "2021–2024" for multi-year construction badges
 ICON_BOX = 124.0                       # icons are drawn on a 200 x 200 grid, scaled to this
 
 FALLBACK_FONTS = [
@@ -84,6 +95,41 @@ def _text_width_units(font_path, text, size_units, spacing_units):
     return f.getlength(text) / 10 + spacing_units * max(0, len(text) - 1)
 
 
+def _arc(rx, ry, top=True):
+    """Half-ellipse path on the road's middle, left to right, over the top or under the bottom."""
+    sweep = 1 if top else 0
+    return (f"M {ROAD_MID_CX - rx:.2f} {ROAD_MID_CY:.2f} A {rx:.2f} {ry:.2f} 0 0 {sweep} "
+            f"{ROAD_MID_CX + rx:.2f} {ROAD_MID_CY:.2f}")
+
+
+def _angle_for_arc_length(rx, ry, length, start_deg):
+    """Walk along an ellipse from start_deg until 'length' road units are covered; return degrees."""
+    t, done, step = math.radians(start_deg), 0.0, math.radians(0.1)
+    while done < length:
+        dx, dy = -rx * math.sin(t), ry * math.cos(t)
+        done += math.hypot(dx, dy) * step
+        t += step
+    return math.degrees(t) - start_deg
+
+
+def road_dashes(title_w, title_r_scale, year_w, year_r_scale):
+    """Dash runs that start the same distance past the end of the title and the year on both
+    sides: a short title gets long runs, a long title short ones. Each side's run begins at the
+    title, so the two sides mirror each other."""
+    rx, ry = ROAD_MID_RX, ROAD_MID_RY
+    a_t = _angle_for_arc_length(rx, ry, title_w / 2 * title_r_scale + DASH_GAP, -90.0)
+    a_y = _angle_for_arc_length(rx, ry, year_w / 2 * year_r_scale + DASH_GAP, 90.0)
+
+    def run(t0, t1):
+        n = max(2, int(abs(t1 - t0) / 1.0))
+        pts = [(ROAD_MID_CX + rx * math.cos(math.radians(t0 + (t1 - t0) * i / n)),
+                ROAD_MID_CY + ry * math.sin(math.radians(t0 + (t1 - t0) * i / n))) for i in range(n + 1)]
+        return "M " + " L ".join(f"{x:.2f} {y:.2f}" for x, y in pts)
+    right = run(-90.0 + a_t, 90.0 - a_y)          # down the right side, from the title to the year
+    left = run(-90.0 - a_t, -270.0 + a_y)         # down the left side, the same way round
+    return right + " " + left
+
+
 def _cap_height_units(font_path, size_units):
     f = _load_font(font_path, int(size_units * 10))
     b = f.getbbox("H")
@@ -125,30 +171,154 @@ def build_svg(hook, icon_inner, cfg):
 
     with open(font_path, "rb") as fh:
         font_b64 = base64.b64encode(fh.read()).decode()
-    tok = {"paper": pal["icon"], "accent": pal["highlight"], "ink": pal["field"]}
-    icon = re.sub(r'"(paper|accent|ink)"', lambda m: f'"{tok[m.group(1)]}"', icon_inner)
-    k = ICON_BOX / 200.0
-    ix, iy = FIELD_CX - ICON_BOX / 2, FIELD_CY - ICON_BOX / 2
+    from .icons import ACCENT_FOR
+    accent = ACCENT_FOR.get(getattr(hook, "icon_key", None), pal["highlight"]) if pal.get("outline") else pal["highlight"]
+    from .icons import HOUSE_COLORS
+    tok = dict(HOUSE_COLORS, paper=pal["icon"], accent=accent, ink=pal["field"])
+    icon = re.sub(r'"(paper|accent|ink|white|orange|road)"', lambda m: f'"{tok[m.group(1)]}"', icon_inner)
+    group_svg = group_circle(getattr(hook, "group", ""), pal) if pal.get("outline") else ""
+    rim = (f'<ellipse cx="{CX}" cy="{CY}" rx="{RING_RX - 2.2}" ry="{RING_RY - 2.2}" fill="none" '
+           f'stroke="{pal["rim"]}" stroke-width="{RIM_W}"/>' if pal.get("rim") else "")
+    # Centering: measure what the picture actually covers, then put the middle of that (or of its
+    # most interesting part, if the icon names one) exactly on the middle of the field.
+    from .icons import FOCUS, SCENES, SCENE_BOX
+    scene = SCENES.get(getattr(hook, "icon_key", None)) if icon_inner == SCENES.get(
+        getattr(hook, "icon_key", None), {}).get("art") else None
+    focus = FOCUS.get(getattr(hook, "icon_key", None))
+    if scene:   # camera shot: the scene's frame maps onto the whole picture, edges and all
+        box, k = SCENE_BOX, (2 * FIELD_RX) / (SCENE_BOX[2] - SCENE_BOX[0])
+    else:
+        box = focus or icon_bbox(icon)
+        k = fit_scale(box, cropped=bool(focus))
+    bx, by = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    icon_transform = f"translate({FIELD_CX} {FIELD_CY}) scale({k:.4f}) translate({-bx:.2f} {-by:.2f})"
+    if scene:
+        from .toon import shade
+        icon_art, icon_defs = shade(icon, None, k, light_deg=pal.get("light_deg", 135.0), band=scene["band"],
+                                    lift=scene["lift"], drop=scene["drop"])
+    elif pal.get("outline"):
+        from .toon import shade
+        icon_art, icon_defs = shade(icon, pal["outline"], k, light_deg=pal.get("light_deg", 135.0),
+                                    hole_color=pal["field"])
+    else:
+        icon_art, icon_defs = icon, ""
+
+    # Title and year sit centered across the road's thickness: the baseline is moved half a capital
+    # letter's height in from the road's middle (the title's letters grow outward, the year's inward).
+    year_text = str(hook.year).replace("-", "\u2013")
+    year_size = YEAR_SIZE if len(str(hook.year)) <= 4 else YEAR_RANGE_SIZE
+    year_ls = 3 if len(str(hook.year)) <= 4 else 1.5
+    t_half = _cap_height_units(font_path, size) / 2
+    y_half = _cap_height_units(font_path, year_size) / 2
+    title_arc = _arc(ROAD_MID_RX - t_half, ROAD_MID_RY - t_half, top=True)
+    year_arc = _arc(ROAD_MID_RX + y_half, ROAD_MID_RY + y_half, top=False)
+    year_w = _text_width_units(font_path, year_text, year_size, year_ls)
+    dashes = road_dashes(width_units, ROAD_MID_RY / (ROAD_MID_RY - t_half), year_w, ROAD_MID_RY / (ROAD_MID_RY + y_half))
 
     cut = f"M {CX - CUT_RX} {CY} A {CUT_RX} {CUT_RY} 0 1 0 {CX + CUT_RX} {CY} A {CUT_RX} {CUT_RY} 0 1 0 {CX - CUT_RX} {CY} Z"
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{vw * unit_in:.4f}in" height="{vh * unit_in:.4f}in" viewBox="{vx:.2f} {vy:.2f} {vw:.2f} {vh:.2f}">
 <defs><style>@font-face{{font-family:PatchFont;src:url(data:font/ttf;base64,{font_b64});font-weight:700;}}</style>
-<path id="tarc" d="{TITLE_ARC}"/><path id="yarc" d="{YEAR_ARC}"/>
-<clipPath id="field"><ellipse cx="{FIELD_CX}" cy="{FIELD_CY}" rx="{FIELD_RX}" ry="{FIELD_RY}"/></clipPath></defs>
+<path id="tarc" d="{title_arc}"/><path id="yarc" d="{year_arc}"/>
+<clipPath id="field"><ellipse cx="{FIELD_CX}" cy="{FIELD_CY}" rx="{FIELD_RX}" ry="{FIELD_RY}"/></clipPath>{icon_defs}</defs>
 <rect id="bleed" x="{vx:.2f}" y="{vy:.2f}" width="{vw:.2f}" height="{vh:.2f}" fill="{pal['edge']}"/>
 <ellipse cx="{CX}" cy="{CY}" rx="{CUT_RX}" ry="{CUT_RY}" fill="{pal['edge']}"/>
 <ellipse cx="{CX}" cy="{CY}" rx="{RING_RX}" ry="{RING_RY}" fill="{pal['ring']}"/>
 <ellipse cx="{FIELD_CX}" cy="{FIELD_CY}" rx="{FIELD_RX}" ry="{FIELD_RY}" fill="{pal['field']}"/>
-<g clip-path="url(#field)"><g transform="translate({ix:.2f} {iy:.2f}) scale({k:.4f})">{icon}</g></g>
-<path d="{ROAD_DASHES}" fill="none" stroke="{pal['text']}" stroke-width="3.5" stroke-dasharray="12 9"/>
+{rim}<g clip-path="url(#field)"><g transform="{icon_transform}">{icon_art}</g></g>
+<path d="{dashes}" fill="none" stroke="{pal.get('dashes', pal['text'])}" stroke-width="3.5" stroke-dasharray="12 9" stroke-linecap="butt"/>
+{group_svg}
 <text font-family="PatchFont" font-weight="700" font-size="{size}" letter-spacing="1" fill="{pal['text']}"><textPath href="#tarc" startOffset="50%" text-anchor="middle"{fit_attr}>{_esc(title)}</textPath></text>
-<text font-family="PatchFont" font-weight="700" font-size="{YEAR_SIZE}" letter-spacing="3" fill="{pal['text']}"><textPath href="#yarc" startOffset="50%" text-anchor="middle">{hook.year}</textPath></text>
+<text font-family="PatchFont" font-weight="700" font-size="{year_size}" letter-spacing="{year_ls}" fill="{pal['text']}"><textPath href="#yarc" startOffset="50%" text-anchor="middle">{_esc(year_text)}</textPath></text>
 </svg>"""
     cutline = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{vw * unit_in:.4f}in" height="{vh * unit_in:.4f}in" '
                f'viewBox="{vx:.2f} {vy:.2f} {vw:.2f} {vh:.2f}"><path d="{cut}" fill="none" stroke="#FF00FF" stroke-width="0.5"/></svg>')
     geo = dict(squeeze=round(squeeze, 3), unit_in=unit_in, vx=vx, vy=vy, vw=vw, vh=vh, size=size, width_units=width_units,
                cap_units=_cap_height_units(font_path, size), font=os.path.basename(font_path))
     return svg, cutline, geo
+
+
+def _flat(fid, color):
+    return (f'<filter id="{fid}" x="-20%" y="-20%" width="140%" height="140%"><feFlood flood-color="{color}"/>'
+            f'<feComposite in2="SourceAlpha" operator="in"/></filter>')
+
+
+def _illustrate(icon, pal, shift=7, outline_px=5):
+    """Illustrator look, as if lit from the upper left: a dark outline around the whole picture,
+    a lighter rim along its upper-left edges and a darker rim along its lower-right edges.
+    Edges come from the picture's own silhouette shifted against itself."""
+    defs = (f'<g id="ic">{icon}</g>'
+            f'<filter id="olf" x="-20%" y="-20%" width="140%" height="140%">'
+            f'<feMorphology in="SourceAlpha" operator="dilate" radius="{outline_px}" result="d"/>'
+            f'<feFlood flood-color="{pal["outline"]}"/><feComposite in2="d" operator="in" result="o"/>'
+            f'<feMerge><feMergeNode in="o"/><feMergeNode in="SourceGraphic"/></feMerge></filter>'
+            + _flat("wf", "#FFFFFF") + _flat("kf", "#000000")
+            + _flat("hlf", pal["light"]) + _flat("shf", pal["shade"])
+            + f'<mask id="hlm" maskUnits="userSpaceOnUse" x="-50" y="-50" width="300" height="300">'
+              f'<use href="#ic" filter="url(#wf)"/><use href="#ic" filter="url(#kf)" transform="translate({shift} {shift})"/></mask>'
+            + f'<mask id="shm" maskUnits="userSpaceOnUse" x="-50" y="-50" width="300" height="300">'
+              f'<use href="#ic" filter="url(#wf)"/><use href="#ic" filter="url(#kf)" transform="translate({-shift} {-shift})"/></mask>')
+    art = ('<use href="#ic" filter="url(#olf)"/>'
+           '<g mask="url(#shm)"><use href="#ic" filter="url(#shf)"/></g>'
+           '<g mask="url(#hlm)" opacity="0.9"><use href="#ic" filter="url(#hlf)"/></g>')
+    return art, defs
+
+
+# The group circle: one small round mark per badge, saying which group it belongs to (a city,
+# or a kind of event such as construction). Same size and place on every badge, overlapping the
+# lower-right edge of the picture, line art only.
+GROUP_R = 23.0
+GROUP_ANGLE = 38.0          # degrees below horizontal, on the picture's edge
+GROUP_INSET = 0.80          # 1.0 = centered on the picture's edge; smaller = further inside
+
+
+def group_circle(group, pal):
+    from .icons import GROUPS
+    art = GROUPS.get(group)
+    if not art:
+        return ""
+    a = math.radians(GROUP_ANGLE)
+    gx = FIELD_CX + FIELD_RX * GROUP_INSET * math.cos(a)
+    gy = FIELD_CY + FIELD_RY * GROUP_INSET * math.sin(a)
+    k = (GROUP_R * 2 * 0.72) / 100.0            # line art sits on a 100-unit grid, 72% of the circle
+    line = pal.get("group_line", "#FFFFFF")
+    return (f'<circle cx="{gx:.2f}" cy="{gy:.2f}" r="{GROUP_R + 2.2}" fill="{pal["outline"]}"/>'
+            f'<circle cx="{gx:.2f}" cy="{gy:.2f}" r="{GROUP_R}" fill="{pal["ring"]}" stroke="{pal["rim"]}" stroke-width="2.2"/>'
+            f'<g transform="translate({gx - 50 * k:.2f} {gy - 50 * k:.2f}) scale({k:.4f})" fill="none" '
+            f'stroke="{line}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">'
+            f'{art.replace("LINE", line)}</g>')
+
+
+ICON_MARGIN = 9.0       # badge units kept clear inside the field when the whole picture shows
+_BBOX_CACHE = {}
+
+
+def fit_scale(box, cropped=False):
+    """Largest scale at which the box fits inside the field ellipse (less a margin). A cropped
+    focus box gets a smaller margin: the rest of the picture is allowed to run off the edge."""
+    w, h = box[2] - box[0], box[3] - box[1]
+    m = ICON_MARGIN * (0.4 if cropped else 1.0)
+    rx, ry = FIELD_RX - m, FIELD_RY - m
+    return 1.0 / math.sqrt((w / 2 / rx) ** 2 + (h / 2 / ry) ** 2)
+
+
+def icon_bbox(icon):
+    """What the picture really covers, in its 200-unit grid, strokes included: rendered once
+    and measured from the pixels, so centering never depends on how the icon was written."""
+    key = hashlib.sha1(icon.encode()).hexdigest()
+    if key in _BBOX_CACHE:
+        return _BBOX_CACHE[key]
+    import tempfile
+    px = 3.0
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="-200 -200 600 600">'
+           f'{icon}</svg>')
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "b.png")
+        render_png(svg, out, 600 * px, 600 * px, dpi=72)
+        with Image.open(out) as im:
+            bb = im.getchannel("A").point(lambda a: 255 if a > 40 else 0).getbbox()
+    box = (-200 + bb[0] / px, -200 + bb[1] / px, -200 + bb[2] / px, -200 + bb[3] / px) if bb else (0, 0, 200, 200)
+    _BBOX_CACHE[key] = box
+    return box
 
 
 def render_png(svg, out_path, width_px, height_px, dpi=300):
@@ -233,7 +403,7 @@ def make_badge(hook, icon_inner, cfg, out_dir):
         failures.append("road ring under 3 mm: picture too close to the cut")
     if checks["title_cap_height_mm"] < cfg.min_cap_height_mm:
         failures.append(f"title letters {checks['title_cap_height_mm']} mm tall < {cfg.min_cap_height_mm} mm")
-    for k in ("contrast_text_vs_ring", "contrast_icon_vs_field"):
-        if checks[k] < cfg.min_contrast:
-            failures.append(f"{k} {checks[k]} < {cfg.min_contrast}")
+    for k, need in (("contrast_text_vs_ring", cfg.min_contrast), ("contrast_icon_vs_field", cfg.min_icon_contrast)):
+        if checks[k] < need:
+            failures.append(f"{k} {checks[k]} < {need}")
     return BadgeResult(files, checks, not failures, failures)

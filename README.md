@@ -115,6 +115,15 @@ Railway's trial and Hobby plans block SMTP, so set `RESEND_API_KEY` (free at res
 100 emails a day) and `MAIL_FROM`; alerts then go through Resend's web API and the badge picture
 is linked from the server. The SMTP settings are only used on your own PC.
 
+## Limited editions
+Each badge is a limited edition of 100 (`edition_size`). Every 10 minutes badgebot counts sales
+from the shop's Printify orders and rewrites the listing's last line ("63 of 100 left"). At 100 it
+takes the badge off the store, emails you "Sold out", and keeps it in `/collection.json`, the feed the
+website reads, with `status: sold_out` and no link, so the gallery can show it struck through and stamped.
+Two sales landing within the same 10 minutes can push a badge a copy or two past 100.
+
+Construction badges can use a year range ("2021-2024"); it prints as 2021–2024 on the ring.
+
 ## Tuning
 
 Everything lives in `badgebot/config.py` (threshold, corridors, hold expiry, patch size,

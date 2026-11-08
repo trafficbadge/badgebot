@@ -10,6 +10,8 @@ States of a run:
   pending_hold  HOLD tier: emailed with Approve / Reject links; never publishes on its own
   approved_waiting  approved, but its category's release time has not come yet
                 (gatherings: no earlier than 9am the morning after); publishes on tick
+  sold_out      the limited edition sold out: off the store, but still shown (stamped) in the
+                collection feed the website reads
   unpublished   owner pressed Unpublish
   rejected      owner pressed Reject on a held badge
   expired       held badge never approved within hold_expiry_min
@@ -103,6 +105,50 @@ class Pipeline:
                 continue   # same event already handled: one event, one badge
             created.append(self._handle(cand, snapshot))
         return created
+
+    def publish_history(self, only=None):
+        """Put the history set on sale, quietly (no posts, no list email), then send you one
+        summary. Safe to run again: badges already made are skipped."""
+        import hashlib
+        from .history import HISTORY, LAUNCH
+        from .icons import LIBRARY, SCENES
+        only = only or LAUNCH
+        from .listing import make_listing
+        made = []
+        for title, year, story, (kind, key) in HISTORY:
+            if only and title not in only:
+                continue
+            rkey = "h" + hashlib.sha1(f"{title}|{year}".encode()).hexdigest()[:9]
+            if self.load(rkey):
+                continue
+            art = SCENES[key]["art"] if kind == "scene" else LIBRARY[key]
+            hook = Hook(title, year, "", key, "history")
+            out_dir = os.path.join(self.runs_dir, rkey)
+            now = self.clock()
+            b = badge_mod.make_badge(hook, art, self.cfg, out_dir)
+            run = {"key": rkey, "tier": "history", "reasons": ["history set"], "title": title, "year": year,
+                   "category": "history", "release": "now", "quiet": True,
+                   "data_at": now.isoformat(), "detected_at": now.isoformat(), "drafted_at": now.isoformat(),
+                   "badge_checks": b.checks, "badge_files": b.files, "icon_source": f"{kind}:{key}",
+                   "token": secrets.token_urlsafe(24)}
+            if not b.passed:
+                run.update(status="blocked", reasons=[f"badge failed print checks: {'; '.join(b.failures)}"])
+                self.save(run)
+                made.append(run)
+                continue
+            from types import SimpleNamespace
+            run["listing"] = make_listing(hook, SimpleNamespace(road=None), self.cfg, b.files["preview"], now,
+                                          story=story)
+            run["listing"]["Tags"] = f"badge, {year}, history"
+            self.save(run)
+            self._publish(run, how="history set")
+            made.append(self.load(rkey))
+        if made:
+            lines = [f"{r['title']} ({r['year']}): {r['status']}" + (f"  {r.get('product_url')}" if r.get("product_url") else "")
+                     for r in made]
+            self.mailer.send(f"History set: {sum(r['status'] == 'published' for r in made)} of {len(made)} badges live",
+                             "\n".join(lines), "<p>" + "<br>".join(html.escape(x) for x in lines) + "</p>")
+        return made
 
     def process_buzz(self, posts):
         """Rule #4: WSDOT posts getting unusual attention become held drafts for your OK."""
@@ -289,6 +335,7 @@ class Pipeline:
         held badges nobody approved."""
         now, changed = self.clock(), []
         self._refresh_tokens(now)
+        changed += self._count_sales(now)
         for run in self.all_runs():
             if run["status"] == "going_live":
                 self._go_live(run)
@@ -349,6 +396,10 @@ class Pipeline:
         img_url = (f"{self.cfg.public_base_url.rstrip('/')}/s/{run['key']}.jpg"
                    if self.cfg.public_base_url else None)
         posts, problems = [], []
+        if run.get("quiet"):   # the history set goes live without announcements
+            run.update(posts=[], post_problems=[])
+            self.save(run)
+            return
         for outlet in self.socials:
             try:
                 posts.append(outlet.post(run, url, img, img_url))
@@ -413,6 +464,60 @@ class Pipeline:
         except Exception:
             todo.append(f"hide the product in Shopify: {run.get('product_url')}")
         return todo
+
+    def _count_sales(self, now):
+        """Limited editions: keep 'N of 100 left' current, and take a badge off sale at 100."""
+        last = getattr(self, "_sales_checked", None)
+        if last and now - last < timedelta(minutes=self.cfg.orders_every_min):
+            return []
+        live = [r for r in self.all_runs() if r["status"] == "published" and (r.get("printify") or {}).get("product_id")]
+        if not live:
+            return []
+        self._sales_checked = now
+        try:
+            counts = self.printify.sold_counts()
+        except Exception as e:
+            print(f"Sales count failed: {e}", flush=True)
+            return []
+        changed, size = [], self.cfg.edition_size
+        for run in live:
+            sold = counts.get(str(run["printify"]["product_id"]), 0)
+            if sold == run.get("sold", 0):
+                continue
+            run["sold"], left = sold, max(0, size - sold)
+            try:
+                if left == 0:
+                    self.printify.take_down(run)
+                    for post in run.get("posts", []):
+                        post["kept"] = True   # announcements stay up; the badge is just sold out
+                    run.update(status="sold_out", sold_out_at=now.isoformat())
+                    self.mailer.send(f"Sold out: {run['title']} ({run['year']})",
+                                     f"All {size} of {run['title']} ({run['year']}) have sold. It is off the store "
+                                     f"and shows as sold out in the collection.",
+                                     f"<p>All {size} of <b>{html.escape(run['title'])} ({run['year']})</b> have sold. "
+                                     f"It is off the store and shows as sold out in the collection.</p>")
+                else:
+                    self.printify.update_left(run, left)
+            except Exception as e:
+                run["sales_error"] = str(e)[:300]
+                print(f"Sales update failed for {run['title']}: {e}", flush=True)
+            self.save(run)
+            changed.append(run)
+        self._write_store()
+        return changed
+
+    def collection(self):
+        """Every badge that has been on sale, newest first, for the website's gallery."""
+        out = []
+        for r in self.all_runs():
+            if r["status"] not in ("published", "sold_out"):
+                continue
+            size, sold = self.cfg.edition_size, r.get("sold", 0)
+            out.append({"key": r["key"], "title": r["title"], "year": r["year"], "status": r["status"],
+                        "edition": size, "left": max(0, size - sold),
+                        "link": r.get("product_url") if r["status"] == "published" else None,
+                        "image": f"/s/{r['key']}.jpg", "since": r.get("published_at")})
+        return sorted(out, key=lambda x: x["since"] or "", reverse=True)
 
     def _refresh_tokens(self, now):
         problems = self.tokens.refresh(self.http or __import__("requests"), now)

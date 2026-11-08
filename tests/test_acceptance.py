@@ -251,7 +251,7 @@ def test_patches_print_ready(tmp_path, replay):
     assert run["badge_failures"] == []
     assert c["shape"] == "patch_oval" and c["print_dpi"] == 300 and c["bleed_mm"] >= 3
     assert c["road_band_mm"] >= 3                      # cut tolerance: picture never near the edge
-    assert c["contrast_text_vs_ring"] >= 4.5 and c["contrast_icon_vs_field"] >= 4.5
+    assert c["contrast_text_vs_ring"] >= 4.5 and c["contrast_icon_vs_field"] >= cfg.min_icon_contrast
     assert c["title_cap_height_mm"] >= cfg.min_cap_height_mm
     assert c["title_width_units"] <= c["title_room_units"]   # title fits the arc, clear of the road dashes
     for f in run["badge_files"].values():
@@ -729,3 +729,51 @@ def test_popup_store_links_are_used_as_given(tmp_path):
     run = p.load(run["key"])
     assert run["status"] == "published" and run["product_url"] == popup
     assert popup in post_text("bluesky", run["title"], run["year"], popup)
+
+
+# ---- 11. Limited edition of 100; year ranges for construction badges -----------------------
+def test_limited_edition_counts_down_then_sells_out_but_stays_in_collection(tmp_path):
+    from badgebot.server import make_app
+    snap = R("blueberry_405_2018")
+    cfg, clock, p = make(tmp_path, snap)
+    [run] = p.process(snap)
+    pid = p.load(run["key"])["printify"]["product_id"]
+    sales = os.path.join(cfg.data_dir, "practice_sales.json")
+    first = next(x for x in outlet_log(cfg) if x["url"].endswith("/products.json"))
+    assert "Limited edition of 100.</b> 100 of 100 left" in first["body"]["description"]
+
+    json.dump({pid: 37}, open(sales, "w")); clock.advance(15); p.tick()
+    put = [x for x in outlet_log(cfg) if x["method"] == "PUT"][-1]
+    assert "63 of 100 left" in put["body"]["description"]
+    col = make_app(p, cfg).test_client().get("/collection.json").get_json()
+    assert col[0]["left"] == 63 and col[0]["link"] and col[0]["status"] == "published"
+
+    json.dump({pid: 101}, open(sales, "w")); clock.advance(15); p.tick()
+    run = p.load(run["key"])
+    assert run["status"] == "sold_out"
+    assert any(x["method"] == "DELETE" and x["outlet"] == "printify" for x in outlet_log(cfg))
+    assert outbox(cfg)[-1]["subject"] == "Sold out: BLUEBERRY TRUCK ON 405 (2018)"
+    app = make_app(p, cfg).test_client()
+    [item] = app.get("/collection.json").get_json()
+    assert item["status"] == "sold_out" and item["left"] == 0 and item["link"] is None
+    assert app.get(item["image"]).status_code == 200       # the picture stays for the stamped gallery
+
+
+@pytest.mark.parametrize("year,ok", [("2021-2024", True), ("2021–2024", True), ("2018", True),
+                                     ("2024-2021", False), ("20211-2024", False), ("2021-2024 VOTE", False)])
+def test_post_text_accepts_year_ranges_only_in_order(year, ok):
+    from badgebot.outlets import OutletError, post_text
+    url = "https://badtraffic206.printify.me/product/1"
+    if ok:
+        assert post_text("bluesky", "MADISON MAYHEM", year, url)
+    else:
+        with pytest.raises(OutletError):
+            post_text("bluesky", "MADISON MAYHEM", year, url)
+
+
+def test_construction_badge_with_year_range_prints(tmp_path):
+    from badgebot.badge import make_badge
+    cfg = Config(data_dir=str(tmp_path))
+    r = make_badge(Hook("MADISON MAYHEM", "2021-2024", "", "cone", "t"), LIBRARY["cone"], cfg, str(tmp_path / "m"))
+    assert r.passed, r.failures
+    assert "2021–2024" in open(r.files["svg"], encoding="utf-8").read()

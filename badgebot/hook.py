@@ -52,6 +52,7 @@ class Hook:
     icon_key: str       # library fallback icon name
     proposer: str       # "rules" or "claude"
     cost_usd: float = 0.0
+    group: str = ""          # group circle (on hold): a city ("seattle") or a kind of event; "" = none
 
 
 def road_label(road):

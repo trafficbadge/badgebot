@@ -46,14 +46,21 @@ class Config:
     bleed_mm: float = 3.0              # white artwork extends past the cut line
     title_max_chars: int = 22          # one arched line; the renderer shrinks it to fit
     min_cap_height_mm: float = 1.8     # smallest allowed letter height in print
-    min_contrast: float = 4.5          # WCAG AA: text vs ring, picture vs center
+    min_contrast: float = 4.5          # WCAG AA for text: title and year vs the ring
+    min_icon_contrast: float = 3.0     # WCAG non-text contrast: picture vs center
+    # Direction A (Nov 5): charcoal road ring with gold edge and gold dashes, royal-blue center,
+    # gold picture toon-shaded from one light, plus a fourth color that follows the cargo (icons.ACCENT_FOR).
     palette: dict = field(default_factory=lambda: {
         "edge": "#FFFFFF",      # thin white rim at the cut line
-        "ring": "#111111",      # the road
-        "field": "#FF6319",     # orange center
-        "icon": "#111111",      # the picture
-        "highlight": "#FCCC0A", # yellow details inside the picture (honey, sparks)
-        "text": "#FFFFFF",      # title, year, road dashes
+        "ring": "#26262B",      # the road
+        "rim": "#F2B705",       # gold edge of the road
+        "dashes": "#F2B705",    # gold center line
+        "text": "#FFFFFF",      # title and year
+        "field": "#1F5FAE",     # royal-blue center
+        "icon": "#F2B705",      # the picture
+        "highlight": "#D7263D", # fourth color: details (unless the cargo has its own color)
+        "outline": "#26262B",   # outline around the picture
+        "light_deg": 135.0,     # the invisible light: 135 = from the upper left
     })
     # Archivo (free, Open Font License), bundled in badgebot/fonts with its OFL.txt.
     title_font: str = field(default_factory=lambda: _env("BADGE_FONT", os.path.join(FONT_DIR, "Archivo_Condensed-Bold.ttf")))
@@ -62,7 +69,7 @@ class Config:
 
     # --- Listing -------------------------------------------------------------
     badge_price: str = "4.00"
-    vendor: str = "I Survived Seattle Traffic"
+    vendor: str = "Bad Traffic 206"
 
     # --- Services (from environment) ----------------------------------------
     wsdot_access_code: str = field(default_factory=lambda: _env("WSDOT_ACCESS_CODE"))
@@ -88,7 +95,9 @@ class Config:
     printify_blueprint_id: str = field(default_factory=lambda: _env("PRINTIFY_BLUEPRINT_ID"))  # Kiss-Cut Stickers
     printify_provider_id: str = field(default_factory=lambda: _env("PRINTIFY_PROVIDER_ID"))
     printify_variant_id: str = field(default_factory=lambda: _env("PRINTIFY_VARIANT_ID"))      # the 2" x 2" size
-    live_wait_min: int = 45            # give up waiting for the store page after this, and email you
+    live_wait_min: int = 45
+    edition_size: int = 100            # limited edition: off sale when this many have sold
+    orders_every_min: int = 10         # how often sales are counted (a sale or two can slip past the cap)            # give up waiting for the store page after this, and email you
 
     # --- Social: posted only after the store page is live; deleted on Unpublish ---------
     bluesky_handle: str = field(default_factory=lambda: _env("BLUESKY_HANDLE"))

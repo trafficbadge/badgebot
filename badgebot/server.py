@@ -8,7 +8,7 @@ GET  /media/<key>/preview.png      badge preview image
 import html
 import os
 
-from flask import Flask, Response, abort, request, send_file
+from flask import Flask, Response, abort, jsonify, request, send_file
 
 LABELS = {"approve": ("Approve and publish", "#1a7f37"),
           "reject": ("Reject", "#b42318"),
@@ -64,9 +64,17 @@ def make_app(pipeline, cfg):
         Served only while the badge is live; Unpublish makes it disappear."""
         run = pipeline.load(key) if key.isalnum() else None
         path = os.path.join(pipeline.runs_dir, key, "social.jpg")
-        if not run or run.get("status") != "published" or not os.path.exists(path):
+        if not run or run.get("status") not in ("published", "sold_out") or not os.path.exists(path):
             abort(404)
         return send_file(os.path.abspath(path), mimetype="image/jpeg")
+
+    @app.get("/collection.json")
+    def collection():
+        """For the website: every badge, its edition count, and a link only while it's for sale."""
+        r = jsonify(pipeline.collection())
+        r.headers["Access-Control-Allow-Origin"] = "*"
+        r.headers["Cache-Control"] = "public, max-age=60"
+        return r
 
     @app.get("/")
     def home():

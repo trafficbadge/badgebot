@@ -34,7 +34,7 @@ def _cap(path, size):
     return b[3] - b[1]
 
 
-def build_svg(cfg, url="SeattleTrafficBadges.com"):
+def build_svg(cfg, url="badtraffic206.com"):
     banner_size, url_size = 360, 120
     top, gap = 90, 75
     banner_base = top + _cap(cfg.banner_font, banner_size)
@@ -61,7 +61,7 @@ def build_svg(cfg, url="SeattleTrafficBadges.com"):
     return svg, slot_boxes, url_base
 
 
-def render(out_dir, cfg=None, url="SeattleTrafficBadges.com", mockup_patches=()):
+def render(out_dir, cfg=None, url="badtraffic206.com", mockup_patches=()):
     cfg = cfg or Config()
     os.makedirs(out_dir, exist_ok=True)
     svg, boxes, url_base = build_svg(cfg, url)
@@ -85,7 +85,7 @@ def render(out_dir, cfg=None, url="SeattleTrafficBadges.com", mockup_patches=())
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
-    ap.add_argument("--url", default="SeattleTrafficBadges.com")
+    ap.add_argument("--url", default="badtraffic206.com")
     ap.add_argument("--mockup", nargs="*", default=[])
     a = ap.parse_args()
     print(render(a.out, url=a.url, mockup_patches=a.mockup))
