@@ -281,12 +281,19 @@ def _numerals(text):
             f'{lettering(text, os.path.join(FONT_DIR, "Archivo-Black.ttf"), fill="none", stroke="LINE", stroke_w=10)}</g>')
 
 
-GROUPS = {
-    "seattle": _numerals("206"),
-    "tacoma": _numerals("253"),
+class _LazyGroups(dict):
+    """Group marks are built the first time they're needed, so starting the server never
+    depends on the font tools."""
+    def get(self, key, default=None):
+        if key in ("seattle", "tacoma") and not dict.__contains__(self, key):
+            self[key] = _numerals({"seattle": "206", "tacoma": "253"}[key])
+        return dict.get(self, key, default)
+
+
+GROUPS = _LazyGroups({
     "construction": ('<path d="M16,66 A34,34 0 0,1 84,66"/><path d="M8,68 H92"/>'
                      '<path d="M50,32 V52"/><path d="M34,40 L38,60"/><path d="M66,40 L62,60"/>'),
-}
+})
 
 
 # ---- Scenes: framed like a camera shot, not a centered icon ---------------------------------
