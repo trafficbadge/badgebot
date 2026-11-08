@@ -777,3 +777,61 @@ def test_construction_badge_with_year_range_prints(tmp_path):
     r = make_badge(Hook("MADISON MAYHEM", "2021-2024", "", "cone", "t"), LIBRARY["cone"], cfg, str(tmp_path / "m"))
     assert r.passed, r.failures
     assert "2021–2024" in open(r.files["svg"], encoding="utf-8").read()
+
+
+# ---- 12. Nov 7 false alarms: titles must be backed by the text --------------------------------
+def nov7_snapshot(text, category, mp, priority="High", road="005"):
+    from badgebot.sources import Snapshot
+    t = datetime(2026, 11, 8, 4, 22, tzinfo=timezone.utc)
+    alert = {"AlertID": 991, "Region": "Northwest", "Priority": priority, "EventCategory": category,
+             "HeadlineDescription": text, "ExtendedDescription": "",
+             "StartRoadwayLocation": {"RoadName": road, "MilePost": mp, "Description": ""},
+             "StartTime": "/Date(1794200000000-0800)/"}
+    return Snapshot(taken_at=t, travel_times=[], alerts=[alert], social=[])
+
+
+FISH_ALERT = ('Northbound and southbound I-5 will be reduced to one lane from 8 p.m. to 5 a.m. nightly Sunday, '
+              'Nov. 8, through Tuesday morning, Nov. 10, north of the North Lake Samish exit (milepost 245-247) as '
+              'work continues on <a href="https://wsdot.wa.gov/construction-planning/search-projects/'
+              'i-5-tributaries-friday-lake-chuckanut-creeks-fish-passage">')
+
+
+def test_nov7_fish_in_a_link_on_planned_work_near_bellingham_is_not_an_event(tmp_path):
+    snap = nov7_snapshot(FISH_ALERT, "Construction", 245)
+    cfg, clock, p = make(tmp_path, snap)
+    assert detect(snap, cfg) == [] and p.process(snap) == []
+
+
+def test_link_words_never_count_even_on_a_seattle_incident(tmp_path):
+    snap = nov7_snapshot('Collision blocking the left lane. Details: <a href="https://x.example/fish-crab">', "Collision", 165)
+    cfg, clock, p = make(tmp_path, snap)
+    assert detect(snap, cfg) == []
+
+
+def test_cargo_word_without_a_truck_or_spill_makes_no_truck_title(tmp_path):
+    from badgebot.hook import rules_hook
+    from badgebot.detect import Candidate
+    c = Candidate(key="k", reason="hook", road="5", max_delay_min=0,
+                  official_text="Downed trees blocking the right lane", hook_words=["trees"])
+    h = rules_hook(c, 2026)
+    assert h is None or "TRUCK" not in h.title
+    c2 = Candidate(key="k", reason="hook", road="5", max_delay_min=0,
+                   official_text="A semi lost its load of blueberries, blocking two lanes", hook_words=["blueberries"])
+    assert rules_hook(c2, 2026).title == "BLUEBERRY TRUCK ON I-5"
+
+
+def test_keyword_without_a_measured_jam_waits_for_your_ok(tmp_path):
+    snap = nov7_snapshot("A semi overturned and spilled its load of crabs across all lanes", "Collision", 166, priority="Highest")
+    cfg, clock, p = make(tmp_path, snap)
+    [run] = p.process(snap)
+    assert run["status"] == "pending_hold" and any("no traffic jam measured" in r for r in run["reasons"])
+
+
+def test_nov7_tree_forecast_post_drafts_no_badge(tmp_path):
+    cfg, now, p = buzz_pipeline(tmp_path)
+    post = bsky_post("The National Weather Service says we could see lots of rain and gusty winds across our region "
+                     "tonight. You might find downed trees and debris, darkened signals or power lines in the road. "
+                     "Be prepared, stay alert and watch for road crews @nws.noaa.gov #wawx", likes=25, reposts=3, now=now)
+    [run] = p.process_buzz([post])
+    assert run["status"] == "blocked" and not run.get("title")
+    assert outbox(cfg)[-1]["subject"] == "Popular WSDOT post: worth a badge?"

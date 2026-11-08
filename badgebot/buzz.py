@@ -31,13 +31,19 @@ def buzzing(posts, cfg, now):
 
 
 def to_candidate(post):
-    text = re.sub(r"\s+", " ", post["text"]).strip()
+    from .detect import clean_text
+    text = clean_text(post["text"])
     m = ROAD.search(text)
     road = m.group(1).upper().replace("SR-", "SR ").replace("SR520", "SR 520").replace("SR99", "SR 99") if m else None
     return Candidate(
         key="bz" + hashlib.sha1(post["uri"].encode()).hexdigest()[:8], reason="buzz", road=road,
         max_delay_min=0, official_text=text, started_at=_when(post),
         hook_words=find_hook_words(text))
+
+
+def is_forecast(cand):
+    from .detect import FORECAST
+    return bool(FORECAST.search(cand.official_text))
 
 
 def plain_title(cand):

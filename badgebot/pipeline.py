@@ -32,7 +32,7 @@ from .icons import get_icon
 from .listing import SHOPIFY_COLUMNS, make_listing
 from .notify import Mailer
 from .outlets import Mailchimp, Printify, Tokens, social_image, social_outlets
-from .safety import BLOCK, HOLD, RELEASE_NEXT_MORNING, check
+from .safety import BLOCK, HOLD, PASS, RELEASE_NEXT_MORNING, check
 
 SEATTLE = ZoneInfo("America/Los_Angeles")
 ACTIONS = {"published": ("unpublish",), "going_live": ("unpublish",), "pending_hold": ("approve", "reject"),
@@ -161,6 +161,9 @@ class Pipeline:
                 continue
             why = f"WSDOT's post is getting unusual attention (score {score(post)}): {post['url']}"
             snap = Snapshot(taken_at=cand.started_at)
+            from .buzz import is_forecast
+            if is_forecast(cand):   # "you might find downed trees" is a warning, not an event
+                cand.hook_words = []
             run = self._handle(cand, snap, fallback_title=plain_title(cand), hold_reason=why)
             if run["status"] == "blocked" and not run.get("title"):
                 # nothing safe to title it with: just tell you about it, once
@@ -180,6 +183,9 @@ class Pipeline:
         if hook is None and fallback_title:
             hook = Hook(fallback_title, year, "a road closed sign and traffic cones", "cone", "rules")
         verdict = check(cand, hook, self.cfg)
+        if (not hold_reason and verdict.tier == PASS and cand.max_delay_min < self.cfg.delay_threshold_min):
+            hold_reason = ("no traffic jam measured: WSDOT's travel times are normal, so a keyword alone "
+                           "waits for your OK")
         if hold_reason and verdict.tier != BLOCK:   # e.g. buzz: never publishes without your OK
             verdict.tier = HOLD
             verdict.reasons = verdict.reasons + [hold_reason]

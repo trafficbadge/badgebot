@@ -62,6 +62,11 @@ def road_label(road):
     return {"5": "I-5", "90": "I-90", "405": "405", "520": "520", "99": "SR-99"}.get(r, r)
 
 
+# Words that back up "TRUCK" / "SPILL" in a title: without one, a cargo word is not a cargo spill.
+SPILL_CUES = re.compile(r"\b(spill(ed|s)?|overturn(ed)?|rolled( over)?|roll-?over|jackknif\w*|"
+                        r"load|cargo|semi|truck|tractor[- ]trailer|trailer|lost (its|their) load)\b", re.I)
+
+
 def rules_hook(cand, year):
     words = cand.hook_words
     road = road_label(cand.road)
@@ -79,7 +84,8 @@ def rules_hook(cand, year):
         w = min(weather, key=lambda x: order.index(x) if x in order else 99)
         return Hook(WEATHER_TITLES.get(w, f"{w.upper()}POCALYPSE"), year,
                     f"a bold {w} symbol over a freeway", ICON_FOR.get(w, "snowflake"), "rules")
-    if cargo:
+    spilled = bool(SPILL_CUES.search(cand.official_text or ""))
+    if cargo and spilled:              # only call it a truck if WSDOT's words say a truck or a spill
         c = cargo[0]
         noun = SINGULAR.get(c, c).upper()
         title = f"{noun} TRUCK ON {road}" if road else f"{noun} TRUCK SPILL"
