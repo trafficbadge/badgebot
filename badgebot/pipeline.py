@@ -190,10 +190,11 @@ class Pipeline:
             nxt = os.path.join(out_dir, "next")
             hook, b = self._history_badge(h, nxt)
             if not b.passed:
-                run.update(refresh_error=f"new art failed print checks: {'; '.join(b.failures)}",
-                           refresh_retry_at=(now + timedelta(days=1)).isoformat())
+                err = f"new art failed print checks: {'; '.join(b.failures)}"
+                if err != run.get("refresh_error"):
+                    failed.append(run)
+                run.update(refresh_error=err, refresh_retry_at=(now + timedelta(days=1)).isoformat())
                 self.save(run)
-                failed.append(run)
                 continue
             listing = self._history_listing(h, hook, b, now)
             listing["Handle"] = run["listing"]["Handle"]          # same product, same address
@@ -201,10 +202,12 @@ class Pipeline:
             try:
                 self.printify.update_art(run, b.files["pod"], listing, left)
             except Exception as e:
-                run.update(refresh_error=str(e)[:300], refresh_retry_at=(now + timedelta(minutes=30)).isoformat())
-                print(f"Art swap failed for {run['title']}: {run['refresh_error']}", flush=True)
+                err = str(e)[:300]
+                if err != run.get("refresh_error"):      # tell you once per new problem, not every retry
+                    failed.append(run)
+                run.update(refresh_error=err, refresh_retry_at=(now + timedelta(minutes=30)).isoformat())
+                print(f"Art swap failed for {run['title']}: {err}", flush=True)
                 self.save(run)
-                failed.append(run)
                 continue
             old = os.path.join(out_dir, "v1")
             if not os.path.exists(old):           # keep what the first buyers got

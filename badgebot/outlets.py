@@ -237,6 +237,15 @@ class Printify:
             self.record("printify", "PUT", self._shop(f"/products/{pid}.json"), body)
             self.record("printify", "POST", self._shop(f"/products/{pid}/publish.json"), publish)
             return
+        # Printify attaches every size of the blueprint to a product (only ours enabled), and an
+        # update must list them all: read the product's own variants and send them back as they are.
+        current = _check(self.http.get(self._shop(f"/products/{pid}.json"), headers=self._h(), timeout=30),
+                         "Printify read product")
+        variants = [{"id": v["id"], "price": v.get("price"), "is_enabled": v.get("is_enabled", False)}
+                    for v in current.get("variants") or [] if "id" in v]
+        if variants:
+            body["variants"] = variants
+            body["print_areas"][0]["variant_ids"] = [v["id"] for v in variants]
         img = _check(self.http.post(f"{self.BASE}/uploads/images.json", json=upload, headers=self._h(), timeout=60),
                      "Printify image upload")
         body["print_areas"][0]["placeholders"][0]["images"][0]["id"] = img["id"]

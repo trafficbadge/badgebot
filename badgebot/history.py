@@ -22,7 +22,7 @@ HISTORY = [
          story="March 23, 2020: the West Seattle Bridge closed for about 908 days after it cracked."),
     dict(title="VIADOOM", year=2019, art=("art", "viadoom.png"),
          story="January 2019: the Alaskan Way Viaduct closed for good, and three weeks with no SR 99."),
-    dict(title="FEATHERED KERFLUFFLE", was="RUFFLED FEATHERS", year=2018, art=("art", "feathered_kerfluffle.png"),
+    dict(title="FEATHERED KERFUFFLE", was="RUFFLED FEATHERS", year=2018, art=("art", "feathered_kerfluffle.png"),
          story="May 23, 2018: about 40,000 pounds of chicken feathers spilled across I-5."),
     dict(title="CRABPOCALYPSE", year=2016, art=("art", "crabpocalypse.png"),
          story="April 4, 2016: frozen crab spilled across the northbound Viaduct."),
