@@ -50,6 +50,11 @@ MIN_SQUEEZE = 0.82                     # last resort: condense a long title up t
 YEAR_SIZE = 19
 YEAR_RANGE_SIZE = 16                    # "2021–2024" for multi-year construction badges
 ICON_BOX = 124.0                       # icons are drawn on a 200 x 200 grid, scaled to this
+ART_DIR = os.path.join(os.path.dirname(__file__), "art")
+# V2 paintings arrive as 1024 x 688 ovals with their own dark frame and red line; this is the part
+# inside the red line, as fractions of the image, which is laid into the orange center.
+ART_CROP = (62 / 1024, 44 / 688, 962 / 1024, 650 / 688)
+MIN_ART_DPI = 300                      # source pixels per printed inch across the center, at least
 
 FALLBACK_FONTS = [
     os.path.join(os.path.dirname(__file__), "fonts", "Archivo_Condensed-Bold.ttf"),
@@ -148,7 +153,20 @@ def _esc(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def build_svg(hook, icon_inner, cfg):
+def art_image(art_png):
+    """The painting's inside, cropped, as (base64 PNG, width px, height px)."""
+    import io
+    with Image.open(art_png) as im:
+        im = im.convert("RGB")
+        w, h = im.size
+        box = (round(ART_CROP[0] * w), round(ART_CROP[1] * h), round(ART_CROP[2] * w), round(ART_CROP[3] * h))
+        crop = im.crop(box)
+    buf = io.BytesIO()
+    crop.save(buf, "PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode(), crop.width, crop.height
+
+
+def build_svg(hook, icon_inner, cfg, art_png=None):
     pal = cfg.palette
     font_path = _font_path(cfg)
     title = hook.title.strip()
@@ -185,14 +203,23 @@ def build_svg(hook, icon_inner, cfg):
     scene = SCENES.get(getattr(hook, "icon_key", None)) if icon_inner == SCENES.get(
         getattr(hook, "icon_key", None), {}).get("art") else None
     focus = FOCUS.get(getattr(hook, "icon_key", None))
-    if scene:   # camera shot: the scene's frame maps onto the whole picture, edges and all
-        box, k = SCENE_BOX, (2 * FIELD_RX) / (SCENE_BOX[2] - SCENE_BOX[0])
+    art = art_image(art_png) if art_png else None
+    if art:     # a painting: fills the center edge to edge (cropped to fit), no shading
+        fx, fy = FIELD_CX - FIELD_RX, FIELD_CY - FIELD_RY
+        icon_transform = "translate(0 0)"
+        icon_art, icon_defs = (f'<image href="data:image/png;base64,{art[0]}" x="{fx}" y="{fy}" '
+                               f'width="{2 * FIELD_RX}" height="{2 * FIELD_RY}" preserveAspectRatio="xMidYMid slice"/>'), ""
     else:
-        box = focus or icon_bbox(icon)
-        k = fit_scale(box, cropped=bool(focus))
-    bx, by = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-    icon_transform = f"translate({FIELD_CX} {FIELD_CY}) scale({k:.4f}) translate({-bx:.2f} {-by:.2f})"
-    if scene:
+        if scene:   # camera shot: the scene's frame maps onto the whole picture, edges and all
+            box, k = SCENE_BOX, (2 * FIELD_RX) / (SCENE_BOX[2] - SCENE_BOX[0])
+        else:
+            box = focus or icon_bbox(icon)
+            k = fit_scale(box, cropped=bool(focus))
+        bx, by = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        icon_transform = f"translate({FIELD_CX} {FIELD_CY}) scale({k:.4f}) translate({-bx:.2f} {-by:.2f})"
+    if art:
+        pass   # a painting is used as it is
+    elif scene:
         from .toon import shade
         icon_art, icon_defs = shade(icon, None, k, light_deg=pal.get("light_deg", 135.0), band=scene["band"],
                                     lift=scene["lift"], drop=scene["drop"])
@@ -233,7 +260,8 @@ def build_svg(hook, icon_inner, cfg):
     cutline = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{vw * unit_in:.4f}in" height="{vh * unit_in:.4f}in" '
                f'viewBox="{vx:.2f} {vy:.2f} {vw:.2f} {vh:.2f}"><path d="{cut}" fill="none" stroke="#FF00FF" stroke-width="0.5"/></svg>')
     geo = dict(squeeze=round(squeeze, 3), unit_in=unit_in, vx=vx, vy=vy, vw=vw, vh=vh, size=size, width_units=width_units,
-               cap_units=_cap_height_units(font_path, size), font=os.path.basename(font_path))
+               cap_units=_cap_height_units(font_path, size), font=os.path.basename(font_path),
+               art_px=(art[1], art[2]) if art else None)
     return svg, cutline, geo
 
 
@@ -340,9 +368,9 @@ def render_png(svg, out_path, width_px, height_px, dpi=300):
     im.save(out_path, dpi=(dpi, dpi))
 
 
-def make_badge(hook, icon_inner, cfg, out_dir):
+def make_badge(hook, icon_inner, cfg, out_dir, art_png=None):
     os.makedirs(out_dir, exist_ok=True)
-    svg, cutline, g = build_svg(hook, icon_inner, cfg)
+    svg, cutline, g = build_svg(hook, icon_inner, cfg, art_png)
     files = {k: os.path.join(out_dir, v) for k, v in dict(
         svg="badge.svg", print="print.png", cutline="cutline.svg", preview="preview.png", thumb="thumb.png",
         pod="pod.png").items()}
@@ -394,6 +422,12 @@ def make_badge(hook, icon_inner, cfg, out_dir):
         "contrast_text_vs_ring": round(contrast(pal["text"], pal["ring"]), 1),
         "contrast_icon_vs_field": round(contrast(pal["icon"], pal["field"]), 1),
     }
+    if g["art_px"]:   # a painting has no single picture color; check its sharpness instead
+        del checks["contrast_icon_vs_field"]
+        field_in = 2 * FIELD_RX * g["unit_in"]
+        # the picture is cropped to fill the center, so the narrower source side sets the sharpness
+        checks["art_dpi"] = round(min(g["art_px"][0] / field_in, g["art_px"][1] / (2 * FIELD_RY * g["unit_in"])))
+        checks["picture"] = "painting"
     failures = []
     if checks["print_dpi"] != 300:
         failures.append("print file is not 300 dpi at full size")
@@ -403,7 +437,9 @@ def make_badge(hook, icon_inner, cfg, out_dir):
         failures.append("road ring under 3 mm: picture too close to the cut")
     if checks["title_cap_height_mm"] < cfg.min_cap_height_mm:
         failures.append(f"title letters {checks['title_cap_height_mm']} mm tall < {cfg.min_cap_height_mm} mm")
+    if checks.get("art_dpi", MIN_ART_DPI) < MIN_ART_DPI:
+        failures.append(f"picture only {checks['art_dpi']} dpi in print < {MIN_ART_DPI}")
     for k, need in (("contrast_text_vs_ring", cfg.min_contrast), ("contrast_icon_vs_field", cfg.min_icon_contrast)):
-        if checks[k] < need:
+        if k in checks and checks[k] < need:
             failures.append(f"{k} {checks[k]} < {need}")
     return BadgeResult(files, checks, not failures, failures)

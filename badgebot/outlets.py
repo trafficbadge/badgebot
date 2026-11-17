@@ -10,6 +10,7 @@ Post wording is a fixed template filled with only the approved title, the year a
 store link we build ourselves; no AI-written text ever reaches social media.
 """
 import base64
+from html import escape as html_escape
 import io
 import json
 import os
@@ -214,6 +215,35 @@ class Printify:
                               json={"title": False, "description": True, "images": False, "variants": False,
                                     "tags": False, "keyFeatures": False, "shipping_template": False}),
                "Printify republish listing")
+
+    def update_art(self, run, pod_png, listing, left):
+        """Swap in place: new picture, title and text on the product already on sale. Same product
+        id, so its sales count and edition carry on."""
+        pid = run["printify"]["product_id"]
+        variant = int(self.cfg.printify_variant_id or 0)
+        with open(pod_png, "rb") as f:
+            upload = {"file_name": f"{listing['Handle']}-v2.png", "contents": base64.b64encode(f.read()).decode()}
+        body = {"title": listing["Title"],
+                "description": edition_html(listing["Body (HTML)"], left, self.cfg.edition_size),
+                "tags": [t.strip() for t in listing["Tags"].split(",")],
+                "variants": [{"id": variant, "price": int(round(float(listing["Variant Price"]) * 100)),
+                              "is_enabled": True}],
+                "print_areas": [{"variant_ids": [variant], "placeholders": [{"position": "front", "images": [
+                    {"id": "<image id>", "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}]}]}]}
+        publish = {"title": True, "description": True, "images": True, "variants": False,
+                   "tags": True, "keyFeatures": False, "shipping_template": False}
+        if self.practice:
+            self.record("printify", "POST", f"{self.BASE}/uploads/images.json", upload)
+            self.record("printify", "PUT", self._shop(f"/products/{pid}.json"), body)
+            self.record("printify", "POST", self._shop(f"/products/{pid}/publish.json"), publish)
+            return
+        img = _check(self.http.post(f"{self.BASE}/uploads/images.json", json=upload, headers=self._h(), timeout=60),
+                     "Printify image upload")
+        body["print_areas"][0]["placeholders"][0]["images"][0]["id"] = img["id"]
+        _check(self.http.put(self._shop(f"/products/{pid}.json"), json=body, headers=self._h(), timeout=60),
+               "Printify update art")
+        _check(self.http.post(self._shop(f"/products/{pid}/publish.json"), json=publish, headers=self._h(),
+                              timeout=60), "Printify republish")
 
     def take_down(self, run):
         pid = (run.get("printify") or {}).get("product_id")
@@ -460,6 +490,45 @@ class Mailchimp:
         c = self._req("POST", "/campaigns", "draft", json=campaign)
         self._req("PUT", f"/campaigns/{c['id']}/content", "content", json=content)
         return {"platform": self.name, "id": c["id"]}
+
+    def draft_announcement(self, items):
+        """One email showing a set of badges (the V2 drop). Drafted only; you send it from Mailchimp.
+        Each item: title, year, url, image_url, new (True = first time on sale)."""
+        for i in items:
+            post_text("mailchimp", i["title"], i["year"], i["url"])   # same refusal rules as the posts
+        n_new = sum(i["new"] for i in items)
+        subject = "New Seattle traffic badges, and a new look"
+        preview = (f"{n_new} new badges and fresh art on {len(items) - n_new} more."
+                   if n_new and len(items) > n_new else "Fresh art for the badges you know.")
+        def cell(i):
+            t = html_escape(f"{i['title']} · {str(i['year']).replace('-', '–')}")
+            img = (f'<img src="{i["image_url"]}" width="240" alt="{t}" style="max-width:100%;display:block;margin:0 auto">'
+                   if i.get("image_url") else "")
+            tag = '<div style="font-size:12px;color:#b42318;font-weight:bold">NEW</div>' if i["new"] else ""
+            return (f'<td style="width:50%;padding:10px;text-align:center;vertical-align:top">{img}{tag}'
+                    f'<div style="font-weight:bold;margin:6px 0">{t}</div>'
+                    f'<a href="{i["url"]}" style="color:#111">Get the badge</a></td>')
+        order = sorted(items, key=lambda i: not i["new"])
+        rows = "".join("<tr>" + "".join(cell(i) for i in order[k:k + 2]) + "</tr>" for k in range(0, len(order), 2))
+        body = (f'<div style="font-family:Helvetica,Arial,sans-serif;font-size:17px;color:#111;max-width:560px">'
+                f'<h1 style="font-size:26px">New badges, and a new look</h1>'
+                f'<p>Every badge in the Bad Traffic 206 history set now has a painted picture, and some have new '
+                f'names. Each one is still a limited edition of 100, made for the slots on your '
+                f'I Survived Seattle Traffic bumper sticker.</p>'
+                f'<table role="presentation" style="width:100%;border-collapse:collapse">{rows}</table>'
+                f'<p style="font-size:12px;color:#666">*|LIST:ADDRESSLINE|*<br>'
+                f'<a href="*|UNSUB|*">Unsubscribe</a></p></div>')
+        campaign = {"type": "regular", "recipients": {"list_id": self.cfg.mailchimp_list_id},
+                    "settings": {"subject_line": subject, "title": "V2 badges", "preview_text": preview,
+                                 "from_name": self.cfg.list_from_name,
+                                 "reply_to": self.cfg.list_reply_to or self.cfg.mail_from or ""}}
+        if self.practice:
+            self.record("mailchimp", "POST", f"{self.base}/campaigns", campaign)
+            self.record("mailchimp", "PUT", f"{self.base}/campaigns/<id>/content", {"html": body})
+            return {"platform": self.name, "id": "practice", "practice": True, "title": "V2 badges"}
+        c = self._req("POST", "/campaigns", "draft", json=campaign)
+        self._req("PUT", f"/campaigns/{c['id']}/content", "content", json={"html": body})
+        return {"platform": self.name, "id": c["id"], "title": "V2 badges"}
 
     def send(self, draft):
         if draft.get("practice"):

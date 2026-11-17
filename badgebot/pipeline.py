@@ -106,40 +106,50 @@ class Pipeline:
             created.append(self._handle(cand, snapshot))
         return created
 
+    def _history_badge(self, h, out_dir):
+        """Draw one history badge from its entry. Returns (hook, badge result)."""
+        from .icons import LIBRARY, SCENES
+        kind, key = h["art"]
+        hook = Hook(h["title"], h["year"], "", key, "history")
+        if kind == "art":
+            return hook, badge_mod.make_badge(hook, "", self.cfg, out_dir,
+                                              art_png=os.path.join(badge_mod.ART_DIR, key))
+        art = SCENES[key]["art"] if kind == "scene" else LIBRARY[key]
+        return hook, badge_mod.make_badge(hook, art, self.cfg, out_dir)
+
+    def _history_listing(self, h, hook, b, now):
+        from types import SimpleNamespace
+        listing = make_listing(hook, SimpleNamespace(road=None), self.cfg, b.files["preview"], now, story=h["story"])
+        listing["Tags"] = f"badge, {h['year']}, history"
+        return listing
+
     def publish_history(self, only=None):
         """Put the history set on sale, quietly (no posts, no list email), then send you one
         summary. Safe to run again: badges already made are skipped."""
-        import hashlib
-        from .history import HISTORY, LAUNCH
-        from .icons import LIBRARY, SCENES
+        from .history import HISTORY, LAUNCH, history_key, source
         only = only or LAUNCH
-        from .listing import make_listing
         made = []
-        for title, year, story, (kind, key) in HISTORY:
+        for h in HISTORY:
+            title, year = h["title"], h["year"]
             if only and title not in only:
                 continue
-            rkey = "h" + hashlib.sha1(f"{title}|{year}".encode()).hexdigest()[:9]
+            rkey = history_key(h)
             if self.load(rkey):
                 continue
-            art = SCENES[key]["art"] if kind == "scene" else LIBRARY[key]
-            hook = Hook(title, year, "", key, "history")
             out_dir = os.path.join(self.runs_dir, rkey)
             now = self.clock()
-            b = badge_mod.make_badge(hook, art, self.cfg, out_dir)
+            hook, b = self._history_badge(h, out_dir)
             run = {"key": rkey, "tier": "history", "reasons": ["history set"], "title": title, "year": year,
                    "category": "history", "release": "now", "quiet": True,
                    "data_at": now.isoformat(), "detected_at": now.isoformat(), "drafted_at": now.isoformat(),
-                   "badge_checks": b.checks, "badge_files": b.files, "icon_source": f"{kind}:{key}",
-                   "token": secrets.token_urlsafe(24)}
+                   "badge_checks": b.checks, "badge_files": b.files, "icon_source": source(h),
+                   "history_sig": self._history_sig(h), "token": secrets.token_urlsafe(24)}
             if not b.passed:
                 run.update(status="blocked", reasons=[f"badge failed print checks: {'; '.join(b.failures)}"])
                 self.save(run)
                 made.append(run)
                 continue
-            from types import SimpleNamespace
-            run["listing"] = make_listing(hook, SimpleNamespace(road=None), self.cfg, b.files["preview"], now,
-                                          story=story)
-            run["listing"]["Tags"] = f"badge, {year}, history"
+            run["listing"] = self._history_listing(h, hook, b, now)
             self.save(run)
             self._publish(run, how="history set")
             made.append(self.load(rkey))
@@ -149,6 +159,118 @@ class Pipeline:
             self.mailer.send(f"History set: {sum(r['status'] == 'published' for r in made)} of {len(made)} badges live",
                              "\n".join(lines), "<p>" + "<br>".join(html.escape(x) for x in lines) + "</p>")
         return made
+
+    @staticmethod
+    def _history_sig(h):
+        from .history import source
+        return [h["title"], str(h["year"]), source(h), h["story"]]
+
+    def refresh_history(self):
+        """Swap in place: a history badge already on sale gets its new picture, title and text,
+        and keeps its listing, its sales count and its edition of 100. The old files are kept in
+        the run's v1 folder. Safe to run on every tick: nothing happens once a badge matches its
+        entry, and a failed store update is retried 30 minutes later. Returns the badges updated."""
+        import shutil
+        from .history import HISTORY, history_key, source
+        now, done, failed = self.clock(), [], []
+        for h in HISTORY:
+            run = self.load(history_key(h))
+            if not run or run["status"] != "published":
+                continue          # not on sale (yet), sold out, or taken down: nothing to swap
+            sig = self._history_sig(h)
+            if run.get("history_sig") == sig:
+                continue
+            if not run.get("history_sig") and [run["title"], str(run["year"]), run.get("icon_source")] == sig[:3]:
+                run["history_sig"] = sig          # sold before signatures existed and unchanged since
+                self.save(run)
+                continue
+            if run.get("refresh_retry_at") and now < datetime.fromisoformat(run["refresh_retry_at"]):
+                continue
+            out_dir = os.path.join(self.runs_dir, run["key"])
+            nxt = os.path.join(out_dir, "next")
+            hook, b = self._history_badge(h, nxt)
+            if not b.passed:
+                run.update(refresh_error=f"new art failed print checks: {'; '.join(b.failures)}",
+                           refresh_retry_at=(now + timedelta(days=1)).isoformat())
+                self.save(run)
+                failed.append(run)
+                continue
+            listing = self._history_listing(h, hook, b, now)
+            listing["Handle"] = run["listing"]["Handle"]          # same product, same address
+            left = max(0, self.cfg.edition_size - run.get("sold", 0))
+            try:
+                self.printify.update_art(run, b.files["pod"], listing, left)
+            except Exception as e:
+                run.update(refresh_error=str(e)[:300], refresh_retry_at=(now + timedelta(minutes=30)).isoformat())
+                print(f"Art swap failed for {run['title']}: {run['refresh_error']}", flush=True)
+                self.save(run)
+                failed.append(run)
+                continue
+            old = os.path.join(out_dir, "v1")
+            if not os.path.exists(old):           # keep what the first buyers got
+                os.makedirs(old)
+                for f in os.listdir(out_dir):
+                    if os.path.isfile(os.path.join(out_dir, f)):
+                        shutil.copy2(os.path.join(out_dir, f), old)
+            files = {}
+            for k, path in b.files.items():
+                dest = os.path.join(out_dir, os.path.basename(path))
+                shutil.move(path, dest)
+                files[k] = dest
+            shutil.rmtree(nxt, ignore_errors=True)
+            listing["Image Src"] = os.path.abspath(files["preview"])
+            social_image(files["pod"], os.path.join(out_dir, "social.jpg"), self.cfg)
+            if run["title"] != h["title"]:
+                run.setdefault("renamed_from", []).append(run["title"])
+            run.update(title=h["title"], year=h["year"], icon_source=source(h), badge_checks=b.checks,
+                       badge_files=files, listing=listing, history_sig=sig, refreshed_at=now.isoformat(),
+                       refresh_error=None, refresh_retry_at=None)
+            self.save(run)
+            done.append(run)
+        if done:
+            self._write_store()
+        if done or failed:
+            lines = [f"{r['title']} ({r['year']}): new art is live"
+                     + (f" (was {r['renamed_from'][-1]})" if r.get("renamed_from") else "") for r in done]
+            lines += [f"{r['title']} ({r['year']}): NOT updated, will retry: {r['refresh_error']}" for r in failed]
+            self.mailer.send(f"History set: new art on {len(done)} badge{'s' * (len(done) != 1)}"
+                             + (f", {len(failed)} to retry" if failed else ""),
+                             "\n".join(lines), "<p>" + "<br>".join(html.escape(x) for x in lines) + "</p>")
+        return done
+
+    def _announcements(self):
+        path = os.path.join(self.cfg.data_dir, "announcements.json")
+        return path, (json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {})
+
+    def announce_v2(self):
+        """Once every V2 badge is settled on the store, draft ONE Mailchimp email showing them, and
+        tell you. It is never sent from here: you look it over and send it from Mailchimp."""
+        from .history import HISTORY, V2, history_key
+        path, state = self._announcements()
+        if "v2" in state:
+            return None
+        entries = [h for h in HISTORY if h["title"] in V2]
+        runs = [self.load(history_key(h)) for h in entries]
+        if any(r is None or r["status"] == "going_live"
+               or (r["status"] == "published" and r.get("history_sig") != self._history_sig(h))
+               for h, r in zip(entries, runs)):
+            return None             # still going live or still waiting for its art swap
+        base = (self.cfg.public_base_url or "").rstrip("/")
+        items = [{"title": r["title"], "year": r["year"], "url": r["product_url"], "new": not r.get("refreshed_at"),
+                  "image_url": f"{base}/s/{r['key']}.jpg" if base else None}
+                 for r in runs if r["status"] == "published" and r.get("product_url")]
+        if not items:
+            return None
+        draft = self.mailchimp.draft_announcement(items)
+        state["v2"] = dict(draft, drafted_at=self.clock().isoformat(), badges=[i["title"] for i in items])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        json.dump(state, open(path, "w", encoding="utf-8"), indent=1)
+        n_new = sum(i["new"] for i in items)
+        msg = (f"The V2 announcement ({n_new} new badges, {len(items) - n_new} with new art) is drafted in "
+               f"Mailchimp and has NOT been sent. Open Mailchimp, Campaigns, \"{draft.get('title', 'V2 badges')}\", "
+               f"send yourself a test, then send or schedule it.")
+        self.mailer.send("V2 list email is ready for you to send", msg, f"<p>{html.escape(msg)}</p>")
+        return state["v2"]
 
     def process_buzz(self, posts):
         """Rule #4: WSDOT posts getting unusual attention become held drafts for your OK."""

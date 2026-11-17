@@ -37,6 +37,8 @@ def main():
     sub.add_parser("status")
     sub.add_parser("printify-setup")
     sub.add_parser("publish-history")
+    sub.add_parser("refresh-history")
+    sub.add_parser("announce-v2")
     pt = sub.add_parser("printify-test"); pt.add_argument("shop_id"); pt.add_argument("--keep", action="store_true")
     a = ap.parse_args()
     cfg = Config()
@@ -60,6 +62,11 @@ def main():
     elif a.cmd == "publish-history":
         for run in p.publish_history():
             print(run["key"], run["status"], run["title"], run.get("product_url") or "")
+    elif a.cmd == "refresh-history":
+        for run in p.refresh_history():
+            print(run["key"], "new art", run["title"], run.get("product_url") or "")
+    elif a.cmd == "announce-v2":
+        print(p.announce_v2() or "Not yet: some V2 badges are still going live (or it was already drafted).")
     elif a.cmd == "printify-setup":
         printify_setup(cfg)
     elif a.cmd == "printify-test":
@@ -155,12 +162,9 @@ def printify_test(cfg, shop_id, keep=False):
 
 def watch(p, cfg, every_min):
     from .sources import fetch_wsdot_bluesky
-    if os.environ.get("PUBLISH_HISTORY") == "1":   # set once in Railway to put the history set on sale
-        try:
-            for run in p.publish_history():
-                print(time.strftime("%H:%M"), "history", run["key"], run["status"], run["title"], flush=True)
-        except Exception as e:
-            print(time.strftime("%H:%M"), "history error:", e, flush=True)
+    history = os.environ.get("PUBLISH_HISTORY") == "1"   # set in Railway: keeps the history set on sale
+    if history:
+        _history_step(p, startup=True)
     last_buzz = 0.0
     while True:
         try:
@@ -179,7 +183,25 @@ def watch(p, cfg, every_min):
             p.tick()
         except Exception as e:
             print(time.strftime("%H:%M"), "tick error:", e, flush=True)
+        if history:
+            _history_step(p)
         time.sleep(every_min * 60)
+
+
+def _history_step(p, startup=False):
+    """Art swaps for badges already on sale, new history badges, then (once) the V2 list draft."""
+    steps = [("history art", p.refresh_history)] + ([("history", p.publish_history)] if startup else [])
+    for name, step in steps:
+        try:
+            for run in step():
+                print(time.strftime("%H:%M"), name, run["key"], run["status"], run["title"], flush=True)
+        except Exception as e:
+            print(time.strftime("%H:%M"), f"{name} error:", e, flush=True)
+    try:
+        if p.announce_v2():
+            print(time.strftime("%H:%M"), "V2 list email drafted in Mailchimp (not sent)", flush=True)
+    except Exception as e:
+        print(time.strftime("%H:%M"), "V2 list email error:", e, flush=True)
 
 
 if __name__ == "__main__":

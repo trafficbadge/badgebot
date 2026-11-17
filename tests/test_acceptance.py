@@ -835,3 +835,119 @@ def test_nov7_tree_forecast_post_drafts_no_badge(tmp_path):
     [run] = p.process_buzz([post])
     assert run["status"] == "blocked" and not run.get("title")
     assert outbox(cfg)[-1]["subject"] == "Popular WSDOT post: worth a badge?"
+
+
+# ---- 12. V2 art: painted pictures, swapped in place on badges already on sale ---------------
+V1_HISTORY = [  # how the set first went on sale (Nov 8), for the swap tests
+    dict(title="MADISON ST.", year="2021-2024", art=("scene", "madison_closed"),
+         story="2021 to 2024: Madison Street torn up to build the RapidRide G Line."),
+    dict(title="THUNDER SNOW", year=2002, art=("scene", "thunder_snow"),
+         story="March 8, 2002: snow, hail and lightning all at once."),
+]
+
+
+def history_pipeline(tmp_path, monkeypatch, entries):
+    import badgebot.history as hist
+    monkeypatch.setattr(hist, "HISTORY", entries)
+    monkeypatch.setattr(hist, "LAUNCH", {h["title"] for h in entries})
+    cfg = Config(data_dir=str(tmp_path), anthropic_api_key=None, smtp_host=None)
+    clock = Clock(datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc))
+    return cfg, clock, Pipeline(cfg, clock=clock)
+
+
+def test_every_v2_painting_makes_a_print_ready_badge(tmp_path):
+    from badgebot import badge
+    from badgebot.history import HISTORY, V2
+    cfg = Config(data_dir=str(tmp_path))
+    assert len(V2) == 17 and all(os.path.exists(os.path.join(badge.ART_DIR, h["art"][1])) for h in HISTORY if h["art"][0] == "art")
+    for h in HISTORY:
+        if h["art"][0] != "art":
+            continue
+        b = badge.make_badge(Hook(h["title"], h["year"], "", h["art"][1], "history"), "", cfg,
+                             str(tmp_path / h["art"][1]), art_png=os.path.join(badge.ART_DIR, h["art"][1]))
+        assert b.passed, (h["title"], b.failures)
+        assert b.checks["picture"] == "painting" and b.checks["art_dpi"] >= 300
+
+
+def test_renamed_badge_keeps_its_key_listing_and_sales(tmp_path, monkeypatch):
+    import badgebot.history as hist
+    cfg, clock, p = history_pipeline(tmp_path, monkeypatch, V1_HISTORY)
+    [madison, thunder] = p.publish_history()
+    assert madison["status"] == "published" and madison["title"] == "MADISON ST."
+    pid = madison["printify"]["product_id"]
+    for key in (madison["key"], thunder["key"]):   # sold before signatures existed
+        r = p.load(key); r.pop("history_sig"); r["sold"] = 37 if key == madison["key"] else 0; p.save(r)
+    n_products = sum(x["url"].endswith("/products.json") for x in outlet_log(cfg))
+
+    real = [dict(title="MADISON MAYHEM", was="MADISON ST.", year="2021-2024", art=("art", "madison_mayhem.png"),
+                 story=V1_HISTORY[0]["story"]), V1_HISTORY[1]]
+    monkeypatch.setattr(hist, "HISTORY", real)
+    clock.advance(60 * 24 * 9)
+    [done] = p.refresh_history()
+    run = p.load(madison["key"])
+    assert done["key"] == madison["key"] and run["title"] == "MADISON MAYHEM"
+    assert run["printify"]["product_id"] == pid and run["sold"] == 37 and run["renamed_from"] == ["MADISON ST."]
+    put = [x for x in outlet_log(cfg) if x["method"] == "PUT"][-1]
+    assert put["body"]["title"].startswith("Madison Mayhem") and "63 of 100 left" in put["body"]["description"]
+    assert sum(x["url"].endswith("/products.json") for x in outlet_log(cfg)) == n_products   # no new product
+    assert os.path.exists(os.path.join(p.runs_dir, run["key"], "v1", "preview.png"))         # V1 art kept
+    assert run["badge_checks"]["picture"] == "painting"
+    assert p.load(thunder["key"])["history_sig"] and not p.load(thunder["key"]).get("refreshed_at")
+    from badgebot.server import make_app
+    col = make_app(p, cfg).test_client().get("/collection.json").get_json()
+    assert {c["title"] for c in col} == {"MADISON MAYHEM", "THUNDER SNOW"}
+    assert outbox(cfg)[-1]["subject"] == "History set: new art on 1 badge"
+    assert p.refresh_history() == []                       # second run: nothing left to do
+
+
+def test_failed_art_swap_keeps_the_old_badge_and_retries(tmp_path, monkeypatch):
+    import badgebot.history as hist
+    cfg, clock, p = history_pipeline(tmp_path, monkeypatch, V1_HISTORY[:1])
+    [madison] = p.publish_history()
+    monkeypatch.setattr(hist, "HISTORY", [dict(V1_HISTORY[0], title="MADISON MAYHEM", was="MADISON ST.",
+                                               art=("art", "madison_mayhem.png"))])
+    def boom(*a, **k):
+        raise RuntimeError("Printify said no")
+    monkeypatch.setattr(p.printify, "update_art", boom)
+    assert p.refresh_history() == []
+    run = p.load(madison["key"])
+    assert run["title"] == "MADISON ST." and "Printify said no" in run["refresh_error"]
+    assert "NOT updated" in outbox(cfg)[-1]["text"]
+    monkeypatch.undo()   # restores update_art (and HISTORY, so set it again)
+    monkeypatch.setattr(hist, "HISTORY", [dict(V1_HISTORY[0], title="MADISON MAYHEM", was="MADISON ST.",
+                                               art=("art", "madison_mayhem.png"))])
+    clock.advance(10)
+    assert p.refresh_history() == []                       # waits 30 minutes before trying again
+    clock.advance(25)
+    [run] = p.refresh_history()
+    assert run["title"] == "MADISON MAYHEM" and not run["refresh_error"]
+
+
+def test_v2_list_email_is_drafted_once_and_never_sent(tmp_path, monkeypatch):
+    import badgebot.history as hist
+    entries = [dict(title="VIADOOM", year=2019, art=("art", "viadoom.png"), story="January 2019: no SR 99."),
+               dict(title="GALLOPING GERTIE", year=1940, art=("art", "galloping_gertie.png"), story="Nov 7, 1940.")]
+    cfg, clock, p = history_pipeline(tmp_path, monkeypatch, entries)
+    monkeypatch.setattr(hist, "V2", ["VIADOOM", "GALLOPING GERTIE"])
+    assert p.announce_v2() is None                         # nothing on sale yet
+    p.publish_history()
+    state = p.announce_v2()
+    assert state["badges"] == ["VIADOOM", "GALLOPING GERTIE"]
+    drafts = [x for x in outlet_log(cfg) if x["outlet"] == "mailchimp"]
+    assert drafts[0]["body"]["settings"]["title"] == "V2 badges"
+    assert not any("/actions/send" in x["url"] for x in outlet_log(cfg))
+    assert outbox(cfg)[-1]["subject"] == "V2 list email is ready for you to send"
+    assert p.announce_v2() is None                         # only once, ever
+    for _ in range(3):
+        clock.advance(200); p.tick()
+    assert not any("/actions/send" in x["url"] for x in outlet_log(cfg))
+
+
+def test_v2_list_email_waits_for_badges_still_going_live(tmp_path, monkeypatch):
+    import badgebot.history as hist
+    entries = [dict(title="VIADOOM", year=2019, art=("art", "viadoom.png"), story="January 2019: no SR 99.")]
+    cfg, clock, p = history_pipeline(tmp_path, monkeypatch, entries)
+    monkeypatch.setattr(hist, "V2", ["VIADOOM"])
+    [run] = p.publish_history()
+    run = p.load(run["key"]); run["status"] = "going_live"; p.save(run)
+    assert p.announce_v2() is None

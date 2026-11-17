@@ -30,7 +30,7 @@ person, even when the alert text names them; the picture is a crowd holding blan
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium      # renders the badge artwork
-python -m pytest -q                         # 54 acceptance tests, about a minute
+python -m pytest -q                         # 83 acceptance tests, about a minute
 python -m badgebot replay replays/blueberry_405_2018.json
 python -m badgebot status
 ```
@@ -123,6 +123,21 @@ website reads, with `status: sold_out` and no link, so the gallery can show it s
 Two sales landing within the same 10 minutes can push a badge a copy or two past 100.
 
 Construction badges can use a year range ("2021-2024"); it prints as 2021–2024 on the ring.
+
+## History set V2: painted art (Nov 17, 2026)
+The history set's pictures are paintings in `badgebot/art` (1024 × 688 ovals; the part inside the red
+line is laid into the center, about 700 dpi in print). Entries live in `badgebot/history.py`.
+
+With `PUBLISH_HISTORY=1`, the watcher now also:
+1. **Swaps art in place** on history badges already on sale: new picture, title and text on the
+   same Printify product, so the sales count and the edition of 100 carry on. The old files stay in
+   the run's `v1` folder. `was` in history.py is the first title, which keeps the badge's key.
+   A failed swap leaves the old badge up and retries 30 minutes later. You get one summary email.
+2. **Puts the rest of the set on sale** (everything but `HELD`), quietly, as before.
+3. **Drafts one Mailchimp email** showing the V2 badges once they are all live, and emails you.
+   It is never sent by badgebot: send or schedule it yourself from Mailchimp.
+
+By hand: `python -m badgebot refresh-history`, `python -m badgebot announce-v2`.
 
 ## Tuning
 
